@@ -12,7 +12,7 @@ import (
 
 func cmdPush(args []string) error {
 	fs := flag.NewFlagSet("push", flag.ContinueOnError)
-	sess := fs.String("session", "", "session id (default: $CLAUDE_SESSION_ID or newest)")
+	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

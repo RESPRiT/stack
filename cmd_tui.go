@@ -19,7 +19,7 @@ import (
 
 func cmdTUI(args []string) error {
 	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
-	sess := fs.String("session", "", "session id (default: $CLAUDE_SESSION_ID or newest)")
+	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -135,16 +135,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 var (
 	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("213"))
 	subtleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	idHeadStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 	topStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("82"))
 	itemStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 )
 
+// renderID shows a session id as 3 bright chars + 5 dim chars when the
+// id is long enough (e.g. a UUID); shorter ids (user-supplied like
+// "demo", or the "(waiting)" placeholder) render as-is.
+func renderID(id string) string {
+	if len(id) < 8 {
+		return subtleStyle.Render(id)
+	}
+	return idHeadStyle.Render(id[:3]) + subtleStyle.Render(id[3:8])
+}
+
 func (m model) View() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("stack"))
 	b.WriteString("  ")
-	b.WriteString(subtleStyle.Render(m.sessionID))
+	b.WriteString(renderID(m.sessionID))
 	if !m.updatedAt.IsZero() {
 		b.WriteString(subtleStyle.Render(fmt.Sprintf("  · updated %s", m.updatedAt.Local().Format("15:04:05"))))
 	}

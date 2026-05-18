@@ -14,7 +14,7 @@ Usage:
   stack tui                live TUI view of the stack
   stack help               show this help
 
-Session resolution: --session flag, then $CLAUDE_SESSION_ID, then the
+Session resolution: --session flag, then $CLAUDE_CODE_SESSION_ID, then the
 most-recently-modified session under ~/.stack/sessions/.
 `
 

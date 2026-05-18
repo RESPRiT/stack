@@ -47,9 +47,13 @@ func Resolve(flag string) (id string, dir string, err error) {
 		d, err := Dir(flag)
 		return flag, d, err
 	}
-	if env := os.Getenv("CLAUDE_SESSION_ID"); env != "" {
-		d, err := Dir(env)
-		return env, d, err
+	// CLAUDE_CODE_SESSION_ID is the canonical var exposed by Claude Code;
+	// CLAUDE_SESSION_ID is honored as a convenience for manual testing.
+	for _, k := range []string{"CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID"} {
+		if env := os.Getenv(k); env != "" {
+			d, err := Dir(env)
+			return env, d, err
+		}
 	}
 	id, err = newestSession()
 	if err != nil {
