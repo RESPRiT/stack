@@ -24,3 +24,23 @@ so the changelog stays honest.
 
 Minor bumps (`0.X` → `0.X+1`) are user-driven — typically a release boundary
 or a coherent surface change. Don't auto-bump minor.
+
+## Verifying TUI changes
+
+After any code change that affects what the Bubble Tea TUI renders, capture
+the pane and read the output back:
+
+```
+tmux capture-pane -t <pane-id> -p | cat -n
+```
+
+`cat -n` numbers the lines so layout shifts are obvious — off-by-one gap
+rows, missing blank separators between sections, wrong scroll offsets, the
+empty-state vs non-empty-state divergence all show up immediately. Counting
+the rows in the diff between what `View()` emits and what tmux actually shows
+has caught several layout bugs in this codebase. The cost is one bash call;
+the alternative is shipping a layout bug and finding out from a user.
+
+Capture both states when the change touches a conditional path (e.g., the
+empty-stack branch differs from the non-empty one) — verifying only the
+"easy" state lets the broken one ship.
