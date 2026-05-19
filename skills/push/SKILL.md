@@ -10,7 +10,11 @@ Run the following command via the Bash tool, then relay its stdout verbatim to t
 stack push "$ARGUMENTS"
 ```
 
-You may re-phrase `$ARGUMENTS` before passing it to `stack push` when the original is verbose, ambiguous, or imprecise — the TUI shows the topic, so a concise, well-scoped phrasing is more useful than a sprawling one. Preserve the meaning; do not change scope. If the original is already crisp (under ~10 words, unambiguous, action-oriented), pass it through verbatim. When you do re-phrase, briefly note what you changed in your reply so the user can correct you if you drifted.
+You may re-phrase `$ARGUMENTS` before passing it to `stack push` when the original is verbose, ambiguous, or imprecise — the TUI shows the topic, so a concise, well-scoped phrasing is more useful than a sprawling one. Preserve the meaning; do not change scope.
+
+**Target length: 5–8 words.** Below 5, the topic is usually too vague to identify what you're working on; above 8, it crowds the TUI and signals the work isn't really one discrete thing. Use 9–12 words sparingly when a shorter phrasing genuinely loses scope.
+
+If the original is already in that range, unambiguous, and action-oriented, pass it through verbatim. When you do re-phrase, briefly note what you changed in your reply so the user can correct you if you drifted.
 
 Then update your own working model: the topic you just pushed is now the active focus. When you finish it, call `/pop`. If the user asks "what are you working on?", read the top of the stack rather than guessing.
 
