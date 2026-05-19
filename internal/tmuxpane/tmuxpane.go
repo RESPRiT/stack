@@ -182,16 +182,19 @@ func EnsureRunning(sessionID string) error {
 }
 
 // Reflow scans every window in the current tmux session for a pane
-// marked @stack-tui. For each, it decides the desired placement from the
-// largest non-TUI pane in that window; if the current placement differs,
-// it kills the TUI pane and respawns it in the new position.
+// marked @stack-tui. For each, it decides the desired placement from
+// the largest non-TUI pane in that window; if the current placement
+// differs, it kills the TUI pane and respawns it in the new position.
 //
-// Coalescing uses leading-edge debounce with a trailing call: the first
-// caller into a quiet period fires immediately, concurrent callers drop
-// their work but raise a trailing flag, and the leading caller performs
-// one more reflow at the window's end if any concurrent caller arrived.
-// This is snappy on the first event and never leaves the pane stuck
-// mid-drag, without flashing the pane on every resize tick.
+// Coalescing splits the work into a fast leading path and a settled
+// trailing path so drag-resizing stays smooth:
+//
+//   - Leading and every tick during a drag: reflowOnce handles
+//     placement changes only — cheap, no tmux resize-pane calls when
+//     placement is stable. tmux's own auto-scaling tracks the drag.
+//   - On the first quiet 60 ms window after events stop arriving:
+//     enforceCanonicalSize fires once and snaps right panes to their
+//     canonical width. Single resize-pane per drag end, no jitter.
 func Reflow() error {
 	if !inTmux() {
 		return nil
@@ -208,12 +211,22 @@ func Reflow() error {
 	if err := reflowOnce(); err != nil {
 		return err
 	}
-	time.Sleep(reflowWindow)
-	pending, err := consumeTrailing()
-	if err != nil || !pending {
-		return err
+	for {
+		time.Sleep(reflowWindow)
+		pending, err := consumeTrailing()
+		if err != nil {
+			return err
+		}
+		if !pending {
+			break
+		}
+		// More events landed during sleep — still mid-drag. Handle any
+		// placement change but defer size enforcement.
+		if err := reflowOnce(); err != nil {
+			return err
+		}
 	}
-	return reflowOnce()
+	return enforceCanonicalSize()
 }
 
 func reflowOnce() error {
@@ -237,33 +250,51 @@ func reflowOnce() error {
 		}
 		cur := currentPlacement(tui)
 		desired := decide(winCols, winRows)
-		if cur != desired {
-			if tui.sessionID == "" {
-				continue // can't relaunch without an id
-			}
-			// findMainPane is still the right *target* for the new
-			// split, even though it's no longer the source of dimensions.
-			main, err := findMainPane(tui.windowID, tui.id)
-			if err != nil || main == nil {
-				continue
-			}
-			_ = exec.Command("tmux", "kill-pane", "-t", tui.id).Run()
-			if _, err := spawnAt(main.id, desired, winCols, tui.sessionID, bin); err != nil {
-				return err
-			}
+		if cur == desired {
 			continue
 		}
-		// Same placement. For right panes, force the canonical width so
-		// rapid-resize / tmux auto-scaling can't leave the pane at a
-		// non-canonical size — the panel is a pure function of window
-		// dims. Top-pane height stays stack-driven via maybeResize from
-		// inside the TUI process.
-		if desired == placementRight {
-			target := rightWidthFor(winCols)
-			if tui.cols != target {
-				_ = exec.Command("tmux", "resize-pane", "-t", tui.id, "-x", strconv.Itoa(target)).Run()
-			}
+		if tui.sessionID == "" {
+			continue // can't relaunch without an id
 		}
+		// findMainPane is still the right *target* for the new split,
+		// even though it's no longer the source of dimensions.
+		main, err := findMainPane(tui.windowID, tui.id)
+		if err != nil || main == nil {
+			continue
+		}
+		_ = exec.Command("tmux", "kill-pane", "-t", tui.id).Run()
+		if _, err := spawnAt(main.id, desired, winCols, tui.sessionID, bin); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// enforceCanonicalSize snaps right-placed @stack-tui panes to
+// rightWidthFor(winCols). Invoked by Reflow only after events settle,
+// so a drag-resize doesn't trigger a tmux resize-pane on every tick —
+// the user sees tmux's own auto-scaling track the drag smoothly, and
+// the canonical width snap fires once at the end. Top panes are
+// left alone (their height is stack-driven by maybeResize inside the
+// TUI process).
+func enforceCanonicalSize() error {
+	tuis, err := findTUIPanes()
+	if err != nil {
+		return err
+	}
+	for _, tui := range tuis {
+		if currentPlacement(tui) != placementRight {
+			continue
+		}
+		winCols, _, err := windowDims(tui.windowID)
+		if err != nil {
+			continue
+		}
+		target := rightWidthFor(winCols)
+		if tui.cols == target {
+			continue
+		}
+		_ = exec.Command("tmux", "resize-pane", "-t", tui.id, "-x", strconv.Itoa(target)).Run()
 	}
 	return nil
 }
