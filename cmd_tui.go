@@ -46,10 +46,10 @@ const (
 	// 200 ms tick keeps the motion smooth (one char per tick).
 	tickInterval = 200 * time.Millisecond
 
-	// View() chrome + tail gap. The tail gap is the user-visible 2-row
+	// View() chrome + tail gap. The tail gap is the user-visible 1-row
 	// space between the footer and the panel divider; chrome is title +
 	// blank + blank + footer.
-	chromeAndGapRows = 6
+	chromeAndGapRows = 5
 )
 
 type scrollMode int
@@ -425,9 +425,9 @@ func (m *model) maybeResize() {
 
 // desiredPaneHeight returns the pane row count that fits the current
 // stack content plus chrome — title, blank, topics (or empty
-// placeholder), blank, footer — with a two-row tail gap below the
+// placeholder), blank, footer — with a one-row tail gap below the
 // footer so the pane never feels crammed against the divider.
-// Clamped to never go below 7 rows or above 35 % of the window.
+// Clamped to never go below 6 rows or above 35 % of the window.
 func desiredPaneHeight(stackLen, windowRows int) int {
 	const (
 		// View() renders 4 chrome rows around the topics list (title,
