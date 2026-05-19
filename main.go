@@ -8,7 +8,7 @@ import (
 // Version is the user-visible release marker. Shown in the TUI header
 // and by `stack --version`. Bumped manually per release; pre-1.0 while
 // the surface is still iterating.
-const Version = "0.1.1"
+const Version = "0.1.2"
 
 const usage = `stack — a topic stack for coding-agent sessions.
 
@@ -22,6 +22,8 @@ Usage:
   stack open               spawn the TUI pane (inside tmux), idempotent
   stack close              dismiss any open TUI pane(s) for this session
   stack reflow             reposition the TUI pane for the current terminal size
+  stack hmr [on|off|status]   toggle hot-reload of the TUI on .go changes (no arg = toggle)
+  stack version            print the version
   stack help               show this help
 
 Session resolution: --session flag, then $CLAUDE_CODE_SESSION_ID, then the
@@ -53,6 +55,8 @@ func main() {
 		err = cmdClose(args)
 	case "reflow":
 		err = cmdReflow(args)
+	case "hmr":
+		err = cmdHMR(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	case "version", "--version", "-v":

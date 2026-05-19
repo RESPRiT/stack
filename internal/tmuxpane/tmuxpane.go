@@ -283,6 +283,21 @@ func inTmux() bool {
 // in the current window?" without spawning one.
 func TUIPaneExists() (bool, error) { return tuiPaneExists() }
 
+// TUIPaneID returns the id and pinned session id of the first
+// @stack-tui pane in the current tmux session, or empty strings if
+// none exists. Used by callers (e.g. hmr) that need a target to
+// respawn against.
+func TUIPaneID() (paneID, sessionID string, err error) {
+	tuis, err := findTUIPanes()
+	if err != nil {
+		return "", "", err
+	}
+	if len(tuis) == 0 {
+		return "", "", nil
+	}
+	return tuis[0].id, tuis[0].sessionID, nil
+}
+
 // CloseAll kills every @stack-tui pane in the current tmux session and
 // returns how many it closed. No-op outside tmux.
 func CloseAll() (int, error) {
