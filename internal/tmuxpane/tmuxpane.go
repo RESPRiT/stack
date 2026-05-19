@@ -329,6 +329,74 @@ func CloseAll() (int, error) {
 	return closed, nil
 }
 
+// CloseForSession kills @stack-tui panes in the current tmux session
+// whose @stack-session option matches sessionID. Used by the
+// SessionStart=clear hook so /clear in one Claude Code instance leaves
+// other instances' panes (in the same tmux session) untouched.
+func CloseForSession(sessionID string) (int, error) {
+	if !inTmux() || sessionID == "" {
+		return 0, nil
+	}
+	tuis, err := findTUIPanes()
+	if err != nil {
+		return 0, err
+	}
+	closed := 0
+	for _, tui := range tuis {
+		if tui.sessionID != sessionID {
+			continue
+		}
+		if err := exec.Command("tmux", "kill-pane", "-t", tui.id).Run(); err == nil {
+			closed++
+		}
+	}
+	return closed, nil
+}
+
+// RetargetForSession retargets any @stack-tui pane in the current tmux
+// session whose @stack-session differs from newSessionID: the old pane
+// is killed and replaced in the same window with a fresh pane bound to
+// newSessionID. Used by the SessionStart=resume hook so the panel
+// follows a /resume into a different Claude Code session.
+//
+// Panes already matching newSessionID are left alone. If no @stack-tui
+// pane exists, this is a no-op — we don't spawn a pane the user didn't
+// already have open.
+func RetargetForSession(newSessionID string) (int, error) {
+	if !inTmux() || newSessionID == "" {
+		return 0, nil
+	}
+	tuis, err := findTUIPanes()
+	if err != nil {
+		return 0, err
+	}
+	bin, err := os.Executable()
+	if err != nil {
+		return 0, err
+	}
+	retargeted := 0
+	for _, tui := range tuis {
+		if tui.sessionID == newSessionID {
+			continue
+		}
+		main, err := findMainPane(tui.windowID, tui.id)
+		if err != nil || main == nil {
+			continue
+		}
+		_ = exec.Command("tmux", "kill-pane", "-t", tui.id).Run()
+		winCols, winRows, werr := windowDims(tui.windowID)
+		if werr != nil {
+			continue
+		}
+		p := decide(winCols, winRows, placementTop)
+		if _, err := spawnAt(main.id, p, newSessionID, bin); err != nil {
+			continue
+		}
+		retargeted++
+	}
+	return retargeted, nil
+}
+
 func tuiPaneExists() (bool, error) {
 	out, err := exec.Command("tmux", "list-panes", "-F", "#{@stack-tui}").Output()
 	if err != nil {
