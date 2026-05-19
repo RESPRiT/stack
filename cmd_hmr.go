@@ -299,9 +299,13 @@ func addRepoDirs(w *fsnotify.Watcher, repo string) error {
 	})
 }
 
-// hmrInterestingEvent filters fsnotify events to only those that should
-// trigger a rebuild: Go source, go.mod, go.sum, and SKILL.md changes.
-// Excludes anything under bin/, .git/, or with editor swap suffixes.
+// hmrInterestingEvent filters fsnotify events to only those that
+// actually change the built binary: non-test Go source, go.mod, and
+// go.sum. Excludes editor swap files, anything under bin/ or .git/,
+// *_test.go (tests aren't compiled into the binary by `go install .`),
+// and SKILL.md (read by Claude Code at invocation time, not embedded
+// in the binary — a rebuild does nothing useful and the respawn
+// flickers the panel for no gain).
 func hmrInterestingEvent(ev fsnotify.Event) bool {
 	if ev.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename) == 0 {
 		return false
@@ -315,10 +319,10 @@ func hmrInterestingEvent(ev fsnotify.Event) bool {
 	}
 	base := filepath.Base(name)
 	switch base {
-	case "go.mod", "go.sum", "SKILL.md":
+	case "go.mod", "go.sum":
 		return true
 	}
-	return strings.HasSuffix(base, ".go")
+	return strings.HasSuffix(base, ".go") && !strings.HasSuffix(base, "_test.go")
 }
 
 // doRebuild runs `go install .` in the repo and, on success, respawns
