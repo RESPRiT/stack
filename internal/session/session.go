@@ -2,11 +2,13 @@
 //
 // Order of precedence:
 //  1. an explicit --session flag (passed in as `flag`)
-//  2. $CLAUDE_SESSION_ID
-//  3. the newest directory under ~/.stack/sessions/
+//  2. $CLAUDE_CODE_SESSION_ID — the canonical var exposed by Claude Code
+//  3. $TEST_SESSION_ID — honored for manual testing
+//  4. the newest directory under ~/.stack/sessions/
 //
 // If a writeable session can't be resolved for a write op (push/pop),
-// we mint one from CLAUDE_SESSION_ID or fall back to "default".
+// the resolver falls back to a literal "default" id so the call still
+// succeeds.
 package session
 
 import (
@@ -48,8 +50,8 @@ func Resolve(flag string) (id string, dir string, err error) {
 		return flag, d, err
 	}
 	// CLAUDE_CODE_SESSION_ID is the canonical var exposed by Claude Code;
-	// CLAUDE_SESSION_ID is honored as a convenience for manual testing.
-	for _, k := range []string{"CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID"} {
+	// TEST_SESSION_ID is honored as a convenience for manual testing.
+	for _, k := range []string{"CLAUDE_CODE_SESSION_ID", "TEST_SESSION_ID"} {
 		if env := os.Getenv(k); env != "" {
 			d, err := Dir(env)
 			return env, d, err
