@@ -26,3 +26,5 @@ Don't pop just because:
 - You finished one tool call within a larger task. The task isn't done.
 - The conversation drifted briefly. Drifts come back.
 - You're about to push something new. Push goes on top; the old top stays underneath.
+
+**It is worth emphasizing, again: the temptation to `/pop` is high since it clears the stack, but it is OK for items on the stack to accumulate! Reserve `/pop` for truly closed loops.**
