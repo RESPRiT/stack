@@ -528,6 +528,10 @@ func (m model) View() string {
 
 	if len(m.topics) == 0 {
 		b.WriteString(subtleStyle.Render("(empty — push a topic to get started)"))
+		// Topic loop writes a trailing \n per item so the blank line
+		// before the footer falls out naturally; the empty branch has
+		// to add one explicitly to keep that blank in the layout.
+		b.WriteString("\n")
 	} else {
 		mode := m.currentScrollMode()
 		renderW := m.topicRenderWidth()
