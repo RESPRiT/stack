@@ -15,3 +15,13 @@ You may re-phrase `$ARGUMENTS` before passing it to `stack push` when the origin
 Then update your own working model: the topic you just pushed is now the active focus. When you finish it, call `/pop`. If the user asks "what are you working on?", read the top of the stack rather than guessing.
 
 If the command fails (no `stack` binary on PATH, etc.), tell the user what went wrong and stop.
+
+## When the agent should self-invoke
+
+Don't wait for the user to type `/push`. When you start a discrete sub-task whose state would be useful to track — kicking off a multi-step refactor, beginning a debugging investigation, taking on a side task — push it yourself via the Skill tool. The TUI shows the user what you're working on; an empty stack while you're deep in a sub-task is a missed signal.
+
+Constraints:
+
+- **Only push what justifies a line in the TUI.** Trivial tool calls (a single grep, one quick read, a short clarifying question) don't merit a push. Multi-step or multi-turn work does.
+- **Don't push and pop within the same response.** If a task is small enough to finish in the turn it started, skip the stack entirely — pushing and popping it just adds noise.
+- **Don't auto-push on every user message.** Push when you're starting work, not when the user is just talking.
