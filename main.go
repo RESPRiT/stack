@@ -12,6 +12,7 @@ Usage:
   stack pop                pop the top topic
   stack ls                 list the stack, top first
   stack tui                live TUI view of the stack
+  stack reflow             reposition the TUI pane for the current terminal size
   stack help               show this help
 
 Session resolution: --session flag, then $CLAUDE_CODE_SESSION_ID, then the
@@ -35,6 +36,8 @@ func main() {
 		err = cmdLs(args)
 	case "tui":
 		err = cmdTUI(args)
+	case "reflow":
+		err = cmdReflow(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:

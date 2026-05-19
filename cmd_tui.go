@@ -15,6 +15,7 @@ import (
 
 	"stack/internal/session"
 	"stack/internal/store"
+	"stack/internal/tmuxpane"
 )
 
 // eventBuf is the channel depth between the watcher goroutine and the
@@ -48,6 +49,11 @@ func cmdTUI(args []string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+
+	// Best-effort: register the client-resized hook so this pane (and any
+	// future ones in this tmux server) repositions itself on resize. A
+	// missing hook just means no auto-reflow; the TUI still works.
+	_ = tmuxpane.EnsureResizeHook()
 
 	events := make(chan tea.Msg, eventBuf)
 	watcher, err := startWatcher(dir, events)
