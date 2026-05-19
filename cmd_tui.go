@@ -466,6 +466,8 @@ func renderID(id string) string {
 func (m model) View() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("stack"))
+	b.WriteString(" ")
+	b.WriteString(subtleStyle.Render(Version))
 	b.WriteString("  ")
 	b.WriteString(renderID(m.sessionID))
 	if !m.updatedAt.IsZero() {

@@ -5,6 +5,11 @@ import (
 	"os"
 )
 
+// Version is the user-visible release marker. Shown in the TUI header
+// and by `stack --version`. Bumped manually per release; pre-1.0 while
+// the surface is still iterating.
+const Version = "0.1.0"
+
 const usage = `stack — a topic stack for coding-agent sessions.
 
 Usage:
@@ -50,6 +55,8 @@ func main() {
 		err = cmdReflow(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
+	case "version", "--version", "-v":
+		fmt.Println(Version)
 	default:
 		fmt.Fprintf(os.Stderr, "stack: unknown command %q\n\n%s", cmd, usage)
 		os.Exit(2)
