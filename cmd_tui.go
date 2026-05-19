@@ -33,7 +33,7 @@ const (
 	// scrollStable is the initial hold at offset 0 before scrolling begins.
 	scrollStable = 10 * time.Second
 	// scrollCharsPerSec controls horizontal-mode glide rate.
-	scrollCharsPerSec = 5
+	scrollCharsPerSec = 8
 	// scrollHoldEnd is the pause after horizontal scrolling reaches the
 	// end before the cycle resets to offset 0.
 	scrollHoldEnd = 10 * time.Second
