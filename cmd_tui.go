@@ -5,7 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -151,18 +153,90 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "r":
 			m.reload()
+			m.maybeResize()
 			return m, waitForEvent(m.events)
 		}
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.maybeResize()
 	case reloadMsg:
 		m.reload()
+		m.maybeResize()
 		return m, waitForEvent(m.events)
 	case watchErrMsg:
 		m.err = msg.err
 		return m, waitForEvent(m.events)
 	}
 	return m, nil
+}
+
+// maybeResize asks tmux to grow or shrink this pane to fit the current
+// stack depth, keeping a constant 2-line gap between the footer and the
+// pane's bottom edge. Only fires for top-placed panes (wider than tall);
+// right-placed panes already span the full window height.
+func (m *model) maybeResize() {
+	paneID := os.Getenv("TMUX_PANE")
+	if paneID == "" {
+		return
+	}
+	// Heuristic: top-placed panes are short and wide; right-placed panes
+	// are tall and narrow. We only auto-resize the short-and-wide case.
+	if m.width <= m.height {
+		return
+	}
+	winRows := queryWindowHeight()
+	if winRows <= 0 {
+		winRows = m.height * 2 // fallback: assume we're using half the window
+	}
+	desired := desiredPaneHeight(len(m.topics), winRows)
+	if desired == m.height {
+		return
+	}
+	_ = exec.Command("tmux", "resize-pane", "-t", paneID, "-y", strconv.Itoa(desired)).Run()
+}
+
+// desiredPaneHeight returns the pane row count that fits the current
+// stack content plus chrome — title, blank, topics (or empty
+// placeholder), blank, footer — with a two-row tail gap below the
+// footer so the pane never feels crammed against the divider.
+// Clamped to never go below 6 rows or above half the window.
+func desiredPaneHeight(stackLen, windowRows int) int {
+	const (
+		// View() renders 4 chrome rows around the topics list:
+		// title, blank, blank, footer. The +1 here is the tail gap;
+		// tmux contributes the second gap row (an off-by-one in
+		// resize-pane -y vs reported pane_height).
+		chromeRows     = 5
+		emptyContent   = 1 // "(empty — push a topic …)"
+		minPaneRows    = 6
+		maxWindowShare = 2 // ≤ 1 / maxWindowShare of the window
+	)
+	content := stackLen
+	if stackLen == 0 {
+		content = emptyContent
+	}
+	h := content + chromeRows
+	if h < minPaneRows {
+		h = minPaneRows
+	}
+	if windowRows > 0 && h > windowRows/maxWindowShare {
+		h = windowRows / maxWindowShare
+	}
+	return h
+}
+
+// queryWindowHeight returns the current tmux window's row count, or 0
+// if we can't determine it (outside tmux, or tmux call failed).
+func queryWindowHeight() int {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{window_height}").Output()
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 var (
