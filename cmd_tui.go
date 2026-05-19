@@ -17,6 +17,11 @@ import (
 	"stack/internal/store"
 )
 
+// eventBuf is the channel depth between the watcher goroutine and the
+// Bubble Tea Cmd loop. 16 is plenty: each push generates at most a few
+// fsnotify ops, and the consumer drains one per Update tick.
+const eventBuf = 16
+
 func cmdTUI(args []string) error {
 	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
 	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")
@@ -44,12 +49,55 @@ func cmdTUI(args []string) error {
 		return err
 	}
 
-	m := model{sessionID: id, sessionDir: dir}
+	events := make(chan tea.Msg, eventBuf)
+	watcher, err := startWatcher(dir, events)
+	if err != nil {
+		return err
+	}
+	defer watcher.Close()
+
+	m := model{sessionID: id, sessionDir: dir, events: events}
 	m.reload()
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
 	return err
+}
+
+// startWatcher attaches an fsnotify watcher to dir and launches a single
+// goroutine that pumps relevant events into ch. Returns the watcher so
+// the caller can close it on shutdown.
+func startWatcher(dir string, ch chan<- tea.Msg) (*fsnotify.Watcher, error) {
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
+	}
+	if err := w.Add(dir); err != nil {
+		w.Close()
+		return nil, err
+	}
+	go func() {
+		for {
+			select {
+			case ev, ok := <-w.Events:
+				if !ok {
+					return
+				}
+				if filepath.Base(ev.Name) == "stack.json" &&
+					ev.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename) != 0 {
+					ch <- reloadMsg{}
+				}
+			case err, ok := <-w.Errors:
+				if !ok {
+					return
+				}
+				if err != nil {
+					ch <- watchErrMsg{err}
+				}
+			}
+		}
+	}()
+	return w, nil
 }
 
 type model struct {
@@ -60,6 +108,7 @@ type model struct {
 	width      int
 	height     int
 	err        error
+	events     chan tea.Msg
 }
 
 type reloadMsg struct{}
@@ -77,37 +126,15 @@ func (m *model) reload() {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(watchCmd(m.sessionDir), tickCmd())
+	return waitForEvent(m.events)
 }
 
-func tickCmd() tea.Cmd {
-	// Coalesced fsnotify events occasionally drop on macOS; a 2s
-	// safety tick keeps the view honest without burning CPU.
-	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return reloadMsg{} })
-}
-
-func watchCmd(dir string) tea.Cmd {
-	return func() tea.Msg {
-		w, err := fsnotify.NewWatcher()
-		if err != nil {
-			return watchErrMsg{err}
-		}
-		if err := w.Add(dir); err != nil {
-			w.Close()
-			return watchErrMsg{err}
-		}
-		// Block until the next relevant event; the Bubble Tea
-		// runtime re-invokes this command after each delivery.
-		for ev := range w.Events {
-			if filepath.Base(ev.Name) == "stack.json" && ev.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename) != 0 {
-				w.Close()
-				return reloadMsg{}
-			}
-		}
-		err = <-w.Errors
-		w.Close()
-		return watchErrMsg{err}
-	}
+// waitForEvent drains exactly one message from the watcher channel.
+// Re-issued after each Update so we keep a single in-flight reader; the
+// watcher itself is one goroutine for the lifetime of the program, so
+// nothing accumulates.
+func waitForEvent(ch <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg { return <-ch }
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -118,16 +145,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "r":
 			m.reload()
-			return m, nil
+			return m, waitForEvent(m.events)
 		}
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case reloadMsg:
 		m.reload()
-		return m, tea.Batch(watchCmd(m.sessionDir), tickCmd())
+		return m, waitForEvent(m.events)
 	case watchErrMsg:
 		m.err = msg.err
-		return m, tickCmd()
+		return m, waitForEvent(m.events)
 	}
 	return m, nil
 }

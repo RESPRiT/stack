@@ -4,10 +4,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"strings"
 
 	"stack/internal/session"
 	"stack/internal/store"
+	"stack/internal/tmuxpane"
 )
 
 func cmdPush(args []string) error {
@@ -34,5 +36,8 @@ func cmdPush(args []string) error {
 		return err
 	}
 	fmt.Printf("pushed onto %s (depth %d): %s\n", id, len(s.Topics), topic)
+	if err := tmuxpane.EnsureRunning(id); err != nil {
+		fmt.Fprintf(os.Stderr, "stack: tui auto-spawn failed: %v\n", err)
+	}
 	return nil
 }
