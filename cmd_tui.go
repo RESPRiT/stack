@@ -38,7 +38,7 @@ const (
 	// end before the cycle resets to offset 0.
 	scrollHoldEnd = 10 * time.Second
 	// scrollVStep advances the vertical view by one row every this often.
-	scrollVStep = 30 * time.Second
+	scrollVStep = 1 * time.Second
 	// scrollVHold is the pause at the bottom of the list before the
 	// vertical cycle restarts.
 	scrollVHold = 30 * time.Second
@@ -285,12 +285,10 @@ func (m *model) advanceScroll() {
 	}
 	switch mode {
 	case scrollHorizontal:
-		maxOff := m.maxScrollOffset()
-		if maxOff <= 0 {
+		cycleEnd := m.horizontalCycleEnd()
+		if cycleEnd == 0 {
 			return
 		}
-		scrollDur := time.Duration(maxOff) * time.Second / scrollCharsPerSec
-		cycleEnd := scrollStable + scrollDur + scrollHoldEnd
 		if time.Since(m.scrollAnchor) > cycleEnd {
 			m.scrollAnchor = time.Now()
 		}
@@ -388,25 +386,88 @@ func (m model) topicRenderWidth() int {
 	return m.width - 2
 }
 
-// horizontalOffset returns how many runes to skip at the start of a
-// topic of the given rune length, given the current scroll cycle.
-// Returns 0 during the stable phase, advances at scrollCharsPerSec,
-// then holds at maxOff during the end-of-scroll pause.
-func (m model) horizontalOffset(topicRunes int) int {
+// horizontalOffset returns the rune offset for the topic at topicIdx
+// under the *serial* horizontal-scroll cycle: at any moment exactly
+// one over-width topic is being scrolled (top-first order); the rest
+// stay at offset 0. After 10s stable, each over-width topic scrolls
+// to its end, holds for scrollHoldEnd, then the next one starts.
+func (m model) horizontalOffset(topicIdx, topicRunes int) int {
 	w := m.topicRenderWidth()
 	if topicRunes <= w {
 		return 0
 	}
-	maxOff := topicRunes - w
 	elapsed := time.Since(m.scrollAnchor)
 	if elapsed < scrollStable {
 		return 0
 	}
-	scrolled := int((elapsed - scrollStable).Seconds() * scrollCharsPerSec)
-	if scrolled > maxOff {
-		return maxOff
+	phaseElapsed := elapsed - scrollStable
+	for _, idx := range m.overlongTopicIndices() {
+		runes := len([]rune(m.topics[idx]))
+		topicMaxOff := runes - w
+		if topicMaxOff <= 0 {
+			continue
+		}
+		scrollDur := time.Duration(topicMaxOff) * time.Second / scrollCharsPerSec
+		topicPhase := scrollDur + scrollHoldEnd
+		if phaseElapsed < topicPhase {
+			if idx != topicIdx {
+				return 0 // not the active topic this frame
+			}
+			scrolled := int(phaseElapsed.Seconds() * scrollCharsPerSec)
+			if scrolled > topicMaxOff {
+				return topicMaxOff
+			}
+			return scrolled
+		}
+		phaseElapsed -= topicPhase
 	}
-	return scrolled
+	// Past the last topic's hold-end; the next advanceScroll tick will
+	// reset the cycle. Until then, render at 0.
+	return 0
+}
+
+// overlongTopicIndices returns the indices of topics that exceed the
+// pane render width, ordered top-first (largest index → smallest).
+// Used by the serial horizontal-scroll cycle.
+func (m model) overlongTopicIndices() []int {
+	w := m.topicRenderWidth()
+	if w <= 0 {
+		return nil
+	}
+	var out []int
+	for i := len(m.topics) - 1; i >= 0; i-- {
+		if len([]rune(m.topics[i])) > w {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// horizontalCycleEnd computes the total duration of one horizontal
+// scroll cycle: the initial stable hold plus, per over-width topic,
+// the scroll duration and the end-of-topic hold. Returns 0 if no
+// topics need scrolling.
+func (m model) horizontalCycleEnd() time.Duration {
+	w := m.topicRenderWidth()
+	if w <= 0 {
+		return 0
+	}
+	total := time.Duration(0)
+	any := false
+	for _, t := range m.topics {
+		runes := len([]rune(t))
+		if runes <= w {
+			continue
+		}
+		any = true
+		maxOff := runes - w
+		scrollDur := time.Duration(maxOff) * time.Second / scrollCharsPerSec
+		total += scrollDur + scrollHoldEnd
+	}
+	if !any {
+		return 0
+	}
+	return scrollStable + total
 }
 
 // maybeResize asks tmux to grow or shrink this pane to fit the current
@@ -510,6 +571,28 @@ func sliceRunes(runes []rune, off, maxRunes int) string {
 	return string(runes[off:end])
 }
 
+// renderTopicRunes wraps sliceRunes for the topic-rendering surface:
+// when off > 0 we prepend a "…" so the user can tell the visible
+// window is mid-string. At the very end of scroll (the trailing window
+// shows the actual last runes) the ellipsis is dropped — those final
+// characters deserve a clean view, and "…" would just hide one.
+func renderTopicRunes(runes []rune, off, width int) string {
+	if width <= 0 || len(runes) == 0 {
+		return ""
+	}
+	if len(runes) <= width || off == 0 {
+		return sliceRunes(runes, 0, width)
+	}
+	if width == 1 {
+		return "…"
+	}
+	// End-of-scroll: show the last `width` runes verbatim.
+	if off+(width-1) >= len(runes) {
+		return sliceRunes(runes, len(runes)-width, width)
+	}
+	return "…" + sliceRunes(runes, off, width-1)
+}
+
 // renderID shows a session id as 3 bright chars + 5 dim chars when the
 // id is long enough (e.g. a UUID); shorter ids (user-supplied like
 // "demo", or the "(waiting)" placeholder) render as-is.
@@ -522,6 +605,8 @@ func renderID(id string) string {
 
 func (m model) View() string {
 	var b strings.Builder
+
+	// Title row.
 	b.WriteString(titleStyle.Render("stack"))
 	b.WriteString(" ")
 	b.WriteString(subtleStyle.Render(Version))
@@ -530,7 +615,20 @@ func (m model) View() string {
 	if !m.updatedAt.IsZero() {
 		b.WriteString(subtleStyle.Render(fmt.Sprintf("  · updated %s", m.updatedAt.Local().Format("15:04:05"))))
 	}
-	b.WriteString("\n\n")
+	b.WriteString("\n")
+
+	// Separator row. Doubles as the "▲ N above" indicator when the
+	// vertical scroll has hidden items above the viewport — replaces
+	// the blank row that would otherwise sit between title and topics.
+	mode := m.currentScrollMode()
+	vOff := 0
+	if mode == scrollVertical {
+		vOff = m.verticalOffset()
+	}
+	if vOff > 0 {
+		b.WriteString(subtleStyle.Render(fmt.Sprintf("▲ %d above", vOff)))
+	}
+	b.WriteString("\n")
 
 	if m.err != nil {
 		b.WriteString(errStyle.Render(fmt.Sprintf("error: %v", m.err)))
@@ -544,14 +642,12 @@ func (m model) View() string {
 		// to add one explicitly to keep that blank in the layout.
 		b.WriteString("\n")
 	} else {
-		mode := m.currentScrollMode()
 		renderW := m.topicRenderWidth()
 
 		// Pick the index range to render. Top-of-stack first.
 		topI := len(m.topics) - 1
 		botI := 0
 		if mode == scrollVertical {
-			vOff := m.verticalOffset()
 			topI -= vOff
 			botI = topI - m.contentRows() + 1
 			if botI < 0 {
@@ -563,9 +659,9 @@ func (m model) View() string {
 			runes := []rune(m.topics[i])
 			off := 0
 			if mode == scrollHorizontal {
-				off = m.horizontalOffset(len(runes))
+				off = m.horizontalOffset(i, len(runes))
 			}
-			visible := sliceRunes(runes, off, renderW)
+			visible := renderTopicRunes(runes, off, renderW)
 			if i == len(m.topics)-1 {
 				b.WriteString(topStyle.Render("▶ " + visible))
 			} else {
