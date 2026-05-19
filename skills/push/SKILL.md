@@ -23,5 +23,4 @@ Don't wait for the user to type `/push`. When you start a discrete sub-task whos
 Constraints:
 
 - **Only push what justifies a line in the TUI.** Trivial tool calls (a single grep, one quick read, a short clarifying question) don't merit a push. Multi-step or multi-turn work does.
-- **Don't push and pop within the same response.** If a task is small enough to finish in the turn it started, skip the stack entirely — pushing and popping it just adds noise.
 - **Don't auto-push on every user message.** Push when you're starting work, not when the user is just talking.
