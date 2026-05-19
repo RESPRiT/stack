@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -100,6 +101,7 @@ func cmdTUI(args []string) error {
 
 	m := model{sessionID: id, sessionDir: dir, events: events}
 	m.reload()
+	m.hmrOn = hmrRunningSilent()
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
@@ -153,6 +155,7 @@ type model struct {
 	events         chan tea.Msg
 	scrollAnchor   time.Time  // start of the current scroll cycle
 	lastScrollMode scrollMode // last observed mode; mode changes reset the anchor
+	hmrOn          bool       // refreshed from ~/.stack/hmr.pid on each tick
 }
 
 type reloadMsg struct{}
@@ -199,6 +202,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.reload()
 			m.maybeResize()
 			return m, waitForEvent(m.events)
+		case "h":
+			// Toggle the HMR daemon. Shelled out, async — if HMR is
+			// being turned on, the daemon's initial rebuild will
+			// respawn this very TUI; we just need the command to
+			// finish before that happens.
+			go toggleHMR()
+			return m, waitForEvent(m.events)
 		}
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -212,9 +222,42 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForEvent(m.events)
 	case tickMsg:
 		m.advanceScroll()
+		m.hmrOn = hmrRunningSilent()
 		return m, tickCmd()
 	}
 	return m, nil
+}
+
+// toggleHMR is the body of the 'h' keypress: shells out to the very
+// same binary with the `hmr` subcommand (no arg = toggle).
+func toggleHMR() {
+	bin, err := os.Executable()
+	if err != nil {
+		return
+	}
+	_ = exec.Command(bin, "hmr").Run()
+}
+
+// hmrRunningSilent is like cmd_hmr.go's hmrRunning() but never cleans
+// up a stale PID file — pure read-only probe used for footer state.
+func hmrRunningSilent() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".stack", "hmr.pid"))
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
 }
 
 // advanceScroll reacts to the per-frame tick. When the active scroll
@@ -515,6 +558,12 @@ func (m model) View() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(subtleStyle.Render("r reload · q quit"))
+	b.WriteString(subtleStyle.Render("r reload · h "))
+	if m.hmrOn {
+		b.WriteString(topStyle.Render("hmr on"))
+	} else {
+		b.WriteString(subtleStyle.Render("hmr off"))
+	}
+	b.WriteString(subtleStyle.Render(" · q quit"))
 	return b.String()
 }
