@@ -36,11 +36,12 @@ func cmdHook(args []string) error {
 // stack panel stays consistent with the user's session state:
 //
 //   - source=clear  → dismiss the panel in the firing Claude Code's
-//     tmux window. /clear rolls a NEW session_id (the docs say it
-//     preserves; empirically it doesn't as of mid-2026), so matching on
-//     session_id breaks. Scoping by window proximity to the firing
-//     Claude Code pane gives the right result without disturbing other
-//     instances in adjacent windows.
+//     tmux window. /clear rolls a NEW session_id on each fire (the
+//     docs are silent on this; verified empirically as of mid-2026), so
+//     matching on session_id against the pane's @stack-session breaks.
+//     Scoping by window proximity to the firing Claude Code pane gives
+//     the right result without disturbing instances in adjacent
+//     windows.
 //   - source=resume → retarget the panel to the resumed session id so it
 //     shows the right stack. Also scoped to the firing pane's window.
 //   - source=startup|compact → no-op. Startup is handled by `stack open`
