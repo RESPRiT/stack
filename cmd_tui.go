@@ -25,6 +25,21 @@ import (
 // fsnotify ops, and the consumer drains one per Update tick.
 const eventBuf = 16
 
+// Scroll animation timings — applied per cycle when the topic list
+// exceeds the available render width.
+const (
+	// scrollStable is the initial hold at offset 0 before scrolling begins.
+	scrollStable = 10 * time.Second
+	// scrollCharsPerSec controls how fast text glides right.
+	scrollCharsPerSec = 5
+	// scrollHoldEnd is the pause after a topic has scrolled to its end
+	// before the cycle resets to offset 0.
+	scrollHoldEnd = 10 * time.Second
+	// tickInterval drives the scroll animation. 5 chars/sec implies a
+	// 200 ms tick keeps the motion smooth (one char per tick).
+	tickInterval = 200 * time.Millisecond
+)
+
 func cmdTUI(args []string) error {
 	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
 	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")
@@ -109,18 +124,20 @@ func startWatcher(dir string, ch chan<- tea.Msg) (*fsnotify.Watcher, error) {
 }
 
 type model struct {
-	sessionID  string
-	sessionDir string
-	topics     []string
-	updatedAt  time.Time
-	width      int
-	height     int
-	err        error
-	events     chan tea.Msg
+	sessionID    string
+	sessionDir   string
+	topics       []string
+	updatedAt    time.Time
+	width        int
+	height       int
+	err          error
+	events       chan tea.Msg
+	scrollAnchor time.Time // start of the current horizontal-scroll cycle
 }
 
 type reloadMsg struct{}
 type watchErrMsg struct{ err error }
+type tickMsg time.Time
 
 func (m *model) reload() {
 	s, err := store.Load(m.sessionDir)
@@ -131,10 +148,17 @@ func (m *model) reload() {
 	m.err = nil
 	m.topics = s.Topics
 	m.updatedAt = s.UpdatedAt
+	// Any state change restarts the scroll cycle so the user sees the
+	// new content from offset 0 rather than mid-scroll.
+	m.scrollAnchor = time.Now()
 }
 
 func (m model) Init() tea.Cmd {
-	return waitForEvent(m.events)
+	return tea.Batch(waitForEvent(m.events), tickCmd())
+}
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(tickInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 // waitForEvent drains exactly one message from the watcher channel.
@@ -166,8 +190,74 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case watchErrMsg:
 		m.err = msg.err
 		return m, waitForEvent(m.events)
+	case tickMsg:
+		m.advanceScroll()
+		return m, tickCmd()
 	}
 	return m, nil
+}
+
+// advanceScroll resets the scroll cycle once the longest topic has
+// finished its post-scroll hold; the next tick after that will be
+// rendered with offset 0.
+func (m *model) advanceScroll() {
+	maxOff := m.maxScrollOffset()
+	if maxOff <= 0 {
+		return
+	}
+	scrollDur := time.Duration(maxOff) * time.Second / scrollCharsPerSec
+	cycleEnd := scrollStable + scrollDur + scrollHoldEnd
+	if time.Since(m.scrollAnchor) > cycleEnd {
+		m.scrollAnchor = time.Now()
+	}
+}
+
+// maxScrollOffset returns the largest offset needed across all topics to
+// reach their respective ends. 0 means nothing needs scrolling at the
+// current pane width.
+func (m *model) maxScrollOffset() int {
+	w := m.topicRenderWidth()
+	if w <= 0 {
+		return 0
+	}
+	max := 0
+	for _, t := range m.topics {
+		l := len([]rune(t))
+		if d := l - w; d > max {
+			max = d
+		}
+	}
+	return max
+}
+
+// topicRenderWidth is the column budget for the topic text itself,
+// after the 2-column "▶ " (or "  ") prefix.
+func (m model) topicRenderWidth() int {
+	if m.width <= 2 {
+		return 0
+	}
+	return m.width - 2
+}
+
+// horizontalOffset returns how many runes to skip at the start of a
+// topic of the given rune length, given the current scroll cycle.
+// Returns 0 during the stable phase, advances at scrollCharsPerSec,
+// then holds at maxOff during the end-of-scroll pause.
+func (m model) horizontalOffset(topicRunes int) int {
+	w := m.topicRenderWidth()
+	if topicRunes <= w {
+		return 0
+	}
+	maxOff := topicRunes - w
+	elapsed := time.Since(m.scrollAnchor)
+	if elapsed < scrollStable {
+		return 0
+	}
+	scrolled := int((elapsed - scrollStable).Seconds() * scrollCharsPerSec)
+	if scrolled > maxOff {
+		return maxOff
+	}
+	return scrolled
 }
 
 // maybeResize asks tmux to grow or shrink this pane to fit the current
@@ -248,6 +338,20 @@ var (
 	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 )
 
+// sliceRunes returns up to maxRunes runes starting at offset off from
+// the rune slice. Out-of-range slices return empty strings rather than
+// panicking. width<=0 yields empty.
+func sliceRunes(runes []rune, off, maxRunes int) string {
+	if maxRunes <= 0 || off >= len(runes) {
+		return ""
+	}
+	end := off + maxRunes
+	if end > len(runes) {
+		end = len(runes)
+	}
+	return string(runes[off:end])
+}
+
 // renderID shows a session id as 3 bright chars + 5 dim chars when the
 // id is long enough (e.g. a UUID); shorter ids (user-supplied like
 // "demo", or the "(waiting)" placeholder) render as-is.
@@ -277,12 +381,15 @@ func (m model) View() string {
 	case 0:
 		b.WriteString(subtleStyle.Render("(empty — push a topic to get started)"))
 	default:
+		renderW := m.topicRenderWidth()
 		for i := len(m.topics) - 1; i >= 0; i-- {
-			topic := m.topics[i]
+			runes := []rune(m.topics[i])
+			off := m.horizontalOffset(len(runes))
+			visible := sliceRunes(runes, off, renderW)
 			if i == len(m.topics)-1 {
-				b.WriteString(topStyle.Render("▶ " + topic))
+				b.WriteString(topStyle.Render("▶ " + visible))
 			} else {
-				b.WriteString(itemStyle.Render("  " + topic))
+				b.WriteString(itemStyle.Render("  " + visible))
 			}
 			b.WriteString("\n")
 		}
