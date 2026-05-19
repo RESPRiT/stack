@@ -289,19 +289,25 @@ func inTmux() bool {
 // in the current window?" without spawning one.
 func TUIPaneExists() (bool, error) { return tuiPaneExists() }
 
-// TUIPaneID returns the id and pinned session id of the first
-// @stack-tui pane in the current tmux session, or empty strings if
-// none exists. Used by callers (e.g. hmr) that need a target to
-// respawn against.
-func TUIPaneID() (paneID, sessionID string, err error) {
-	tuis, err := findTUIPanes()
+// TUIPaneInfo is the exported view of a discovered @stack-tui pane.
+type TUIPaneInfo struct {
+	ID        string // tmux pane id, e.g. "%264"
+	SessionID string // value of the pane's @stack-session option
+}
+
+// AllTUIPanes returns every @stack-tui pane on the tmux server —
+// across every session, not just the current one. HMR uses this so a
+// single daemon keeps every running TUI in sync after a rebuild.
+func AllTUIPanes() ([]TUIPaneInfo, error) {
+	tuis, err := findTUIPanesScoped(true)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
-	if len(tuis) == 0 {
-		return "", "", nil
+	out := make([]TUIPaneInfo, 0, len(tuis))
+	for _, t := range tuis {
+		out = append(out, TUIPaneInfo{ID: t.id, SessionID: t.sessionID})
 	}
-	return tuis[0].id, tuis[0].sessionID, nil
+	return out, nil
 }
 
 // CloseAll kills every @stack-tui pane in the current tmux session and
@@ -365,9 +371,21 @@ func windowDims(windowID string) (cols, rows int, err error) {
 }
 
 // findTUIPanes lists every pane in the current tmux session whose
-// @stack-tui option is set, returning enough info to reflow it.
+// @stack-tui option is set. For all-server discovery (used by HMR),
+// see findTUIPanesScoped.
 func findTUIPanes() ([]paneInfo, error) {
-	out, err := exec.Command("tmux", "list-panes", "-s", "-F",
+	return findTUIPanesScoped(false)
+}
+
+// findTUIPanesScoped lists @stack-tui panes either in the current tmux
+// session (allSessions=false) or across every session on the server
+// (allSessions=true).
+func findTUIPanesScoped(allSessions bool) ([]paneInfo, error) {
+	scope := "-s" // current session only
+	if allSessions {
+		scope = "-a" // every session on this tmux server
+	}
+	out, err := exec.Command("tmux", "list-panes", scope, "-F",
 		"#{pane_id} #{window_id} #{pane_width} #{pane_height} #{@stack-tui} #{@stack-session} #{@stack-placement}").Output()
 	if err != nil {
 		return nil, fmt.Errorf("list-panes -s: %w", err)

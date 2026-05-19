@@ -120,13 +120,15 @@ func hmrOn() error {
 	if err != nil {
 		return err
 	}
-	// And a pane to respawn.
-	paneID, _, err := tmuxpane.TUIPaneID()
+	// And at least one pane to respawn. Search the entire tmux server
+	// because HMR is single-instance per machine and the user may be
+	// running stack across multiple sessions.
+	panes, err := tmuxpane.AllTUIPanes()
 	if err != nil {
 		return err
 	}
-	if paneID == "" {
-		return errors.New("no @stack-tui pane to drive — run `stack open` first")
+	if len(panes) == 0 {
+		return errors.New("no @stack-tui pane on this tmux server — run `stack open` first")
 	}
 
 	bin, err := os.Executable()
@@ -225,13 +227,6 @@ func hmrServe() error {
 	if err != nil {
 		return err
 	}
-	paneID, sessionID, err := tmuxpane.TUIPaneID()
-	if err != nil {
-		return err
-	}
-	if paneID == "" {
-		return errors.New("no @stack-tui pane to drive")
-	}
 
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -247,10 +242,10 @@ func hmrServe() error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 
-	fmt.Printf("[hmr] watching %s, target pane %s\n", repo, paneID)
+	fmt.Printf("[hmr] watching %s, respawning every @stack-tui pane\n", repo)
 
 	// Initial build+respawn so the user sees a clean baseline.
-	doRebuild(repo, paneID, sessionID)
+	doRebuild(repo)
 
 	var (
 		debounceTimer  *time.Timer
@@ -271,7 +266,7 @@ func hmrServe() error {
 			debounceTimer = time.NewTimer(hmrDebounce)
 			debounceTimerC = debounceTimer.C
 		case <-debounceTimerC:
-			doRebuild(repo, paneID, sessionID)
+			doRebuild(repo)
 			debounceTimer = nil
 			debounceTimerC = nil
 		case err, ok := <-w.Errors:
@@ -327,8 +322,10 @@ func hmrInterestingEvent(ev fsnotify.Event) bool {
 }
 
 // doRebuild runs `go install .` in the repo and, on success, respawns
-// the TUI pane so the new binary is picked up immediately.
-func doRebuild(repo, paneID, sessionID string) {
+// every @stack-tui pane on the tmux server so they all pick up the
+// new binary at once. Panes are re-queried each rebuild so new ones
+// (created mid-session via /push) are picked up automatically.
+func doRebuild(repo string) {
 	t0 := time.Now()
 	build := exec.Command("go", "install", ".")
 	build.Dir = repo
@@ -337,12 +334,20 @@ func doRebuild(repo, paneID, sessionID string) {
 		fmt.Printf("[hmr] build failed (%s):\n%s\n", time.Since(t0).Round(time.Millisecond), out)
 		return
 	}
-	bin, _ := os.Executable()
-	cmdLine := fmt.Sprintf("CLAUDE_CODE_SESSION_ID=%s exec %q tui", sessionID, bin)
-	respawn := exec.Command("tmux", "respawn-pane", "-k", "-t", paneID, cmdLine)
-	if err := respawn.Run(); err != nil {
-		fmt.Printf("[hmr] respawn failed: %v\n", err)
+	panes, err := tmuxpane.AllTUIPanes()
+	if err != nil {
+		fmt.Printf("[hmr] list panes failed: %v\n", err)
 		return
 	}
-	fmt.Printf("[hmr] rebuilt + respawned %s (%s)\n", paneID, time.Since(t0).Round(time.Millisecond))
+	bin, _ := os.Executable()
+	respawned := 0
+	for _, p := range panes {
+		cmdLine := fmt.Sprintf("CLAUDE_CODE_SESSION_ID=%s exec %q tui", p.SessionID, bin)
+		if err := exec.Command("tmux", "respawn-pane", "-k", "-t", p.ID, cmdLine).Run(); err != nil {
+			fmt.Printf("[hmr] respawn %s failed: %v\n", p.ID, err)
+			continue
+		}
+		respawned++
+	}
+	fmt.Printf("[hmr] rebuilt + respawned %d pane(s) (%s)\n", respawned, time.Since(t0).Round(time.Millisecond))
 }
