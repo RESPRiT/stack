@@ -25,6 +25,33 @@ so the changelog stays honest.
 Minor bumps (`0.X` → `0.X+1`) are user-driven — typically a release boundary
 or a coherent surface change. Don't auto-bump minor.
 
+## Dev loop
+
+Default to HMR. At the start of any session that involves TUI iteration,
+turn the watcher daemon on:
+
+```
+stack hmr on
+```
+
+Each `.go` save triggers a debounced `go install .` and respawns the
+`@stack-tui` pane within ~600 ms — no need for manual `go install` +
+`stack close && stack open` cycles. Build errors stream to
+`~/.stack/hmr.log`; if the TUI stops updating after a save, tail the log.
+
+Only fall back to manual rebuild when:
+
+- The change is non-TUI (CLI subcommand, internal package called by
+  another CLI surface) — HMR respawns the TUI but doesn't affect CLI
+  invocations that aren't in a watched pane.
+- You need the `go install` error directly in your tool output (e.g.,
+  to paste into a reply or reason about the failure inline).
+- You're intentionally testing the pane lifecycle itself (close/open,
+  reflow, auto-spawn) and need a known-good binary to start from.
+
+Toggle from inside the TUI via the `h` keybind; toggle from a shell via
+`stack hmr` (no arg = toggle, `on`/`off`/`status` are explicit).
+
 ## Verifying TUI changes
 
 After any code change that affects what the Bubble Tea TUI renders, capture
