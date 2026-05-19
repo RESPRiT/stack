@@ -68,23 +68,33 @@ func (p placement) splitArgs(target string) []string {
 	}
 }
 
-// Hysteresis thresholds for decide(). The asymmetric band (1.35..1.65
-// around the 1.5 ideal) prevents flapping when a drag-resize crosses
-// the threshold with mouse jitter: once placed at top, we don't flip to
-// right until the aspect is clearly wide; once at right, we don't flip
-// to top until the aspect is clearly tall.
+// cellAspect normalizes character-cell shape to pixels. Terminal cells
+// are roughly twice as tall as they are wide, so a "visually square"
+// terminal has cols ≈ 2 × rows. Dividing by this turns the raw cols/rows
+// ratio into a visual aspect ratio where 1.0 means visually square.
+const cellAspect = 2.0
+
+// Hysteresis thresholds for decide(), in *visual* aspect units
+// (cols / (rows × cellAspect)). The asymmetric 0.95..1.05 band around
+// 1.0 prevents flapping when a drag-resize crosses the threshold with
+// mouse jitter: once placed at top, we don't flip to right until the
+// aspect is clearly wide; once at right, we don't flip to top until the
+// aspect is clearly tall.
 const (
-	flipToRight = 1.65
-	flipToTop   = 1.35
+	flipToRight = 1.05
+	flipToTop   = 0.95
 )
 
-// decide returns the placement we should be in given the main pane's
-// dimensions and where we are now. Inside the deadband, current wins.
+// decide returns the placement we should be in given the window's
+// dimensions and where we are now. Uses window dims (not the main
+// pane's) because the main pane's aspect depends on where the TUI sits
+// — using it would flap on every resize. Normalizes by cellAspect so
+// thresholds reflect visual perception rather than raw character grid.
 func decide(cols, rows int, current placement) placement {
 	if rows == 0 {
 		return current
 	}
-	ratio := float64(cols) / float64(rows)
+	ratio := float64(cols) / (float64(rows) * cellAspect)
 	switch current {
 	case placementRight:
 		if ratio < flipToTop {
@@ -140,11 +150,15 @@ func EnsureRunning(sessionID string) error {
 	if err != nil {
 		return err
 	}
+	winCols, winRows, err := windowDims(current.windowID)
+	if err != nil {
+		return err
+	}
 	bin, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	_, err = spawnAt(current.id, decide(current.cols, current.rows, placementTop), sessionID, bin)
+	_, err = spawnAt(current.id, decide(winCols, winRows, placementTop), sessionID, bin)
 	return err
 }
 
@@ -193,16 +207,27 @@ func reflowOnce() error {
 		return err
 	}
 	for _, tui := range tuis {
-		main, err := findMainPane(tui.windowID, tui.id)
-		if err != nil || main == nil {
+		// Decide from the window dims, not the main pane's dims. The
+		// main pane's aspect ratio depends on where the TUI currently
+		// sits (a top-split shrinks rows; a right-split shrinks cols),
+		// so using it would flap the placement back and forth on every
+		// resize.
+		winCols, winRows, err := windowDims(tui.windowID)
+		if err != nil {
 			continue
 		}
-		desired := decide(main.cols, main.rows, currentPlacement(tui))
+		desired := decide(winCols, winRows, currentPlacement(tui))
 		if currentPlacement(tui) == desired {
 			continue
 		}
 		if tui.sessionID == "" {
 			continue // can't relaunch without an id
+		}
+		// findMainPane is still the right *target* for the new split,
+		// even though it's no longer the source of dimensions.
+		main, err := findMainPane(tui.windowID, tui.id)
+		if err != nil || main == nil {
+			continue
 		}
 		_ = exec.Command("tmux", "kill-pane", "-t", tui.id).Run()
 		if _, err := spawnAt(main.id, desired, tui.sessionID, bin); err != nil {
@@ -272,6 +297,26 @@ func currentPaneInfo() (paneInfo, error) {
 		return paneInfo{}, fmt.Errorf("display-message: %w", err)
 	}
 	return parsePaneLine(strings.TrimSpace(string(out)))
+}
+
+// windowDims returns the total window dimensions (the area visible to
+// all panes in the window). This is invariant under TUI placement,
+// which is what we want when deciding where the TUI should live.
+func windowDims(windowID string) (cols, rows int, err error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", windowID, "#{window_width} #{window_height}").Output()
+	if err != nil {
+		return 0, 0, fmt.Errorf("display-message window: %w", err)
+	}
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("window dims: unexpected output %q", string(out))
+	}
+	cols, err = strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	rows, err = strconv.Atoi(parts[1])
+	return cols, rows, err
 }
 
 // findTUIPanes lists every pane in the current tmux session whose
