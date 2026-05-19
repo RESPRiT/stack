@@ -120,16 +120,6 @@ func hmrOn() error {
 	if err != nil {
 		return err
 	}
-	// And at least one pane to respawn. Search the entire tmux server
-	// because HMR is single-instance per machine and the user may be
-	// running stack across multiple sessions.
-	panes, err := tmuxpane.AllTUIPanes()
-	if err != nil {
-		return err
-	}
-	if len(panes) == 0 {
-		return errors.New("no @stack-tui pane on this tmux server — run `stack open` first")
-	}
 
 	bin, err := os.Executable()
 	if err != nil {
@@ -242,10 +232,7 @@ func hmrServe() error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 
-	fmt.Printf("[hmr] watching %s, respawning every @stack-tui pane\n", repo)
-
-	// Initial build+respawn so the user sees a clean baseline.
-	doRebuild(repo)
+	fmt.Printf("[hmr] watching %s, respawning panes with @stack-hmr=1\n", repo)
 
 	var (
 		debounceTimer  *time.Timer
@@ -326,9 +313,11 @@ func hmrInterestingEvent(ev fsnotify.Event) bool {
 }
 
 // doRebuild runs `go install .` in the repo and, on success, respawns
-// every @stack-tui pane on the tmux server so they all pick up the
-// new binary at once. Panes are re-queried each rebuild so new ones
-// (created mid-session via /push) are picked up automatically.
+// each @stack-tui pane with @stack-hmr=1 so they pick up the new
+// binary. Panes are re-queried each rebuild so new opt-ins
+// (toggled mid-session via the TUI's `h` keybind) are picked up
+// automatically. Panes without @stack-hmr=1 are left alone — that's
+// the per-pane opt-in contract.
 func doRebuild(repo string) {
 	t0 := time.Now()
 	build := exec.Command("go", "install", ".")
@@ -338,9 +327,13 @@ func doRebuild(repo string) {
 		fmt.Printf("[hmr] build failed (%s):\n%s\n", time.Since(t0).Round(time.Millisecond), out)
 		return
 	}
-	panes, err := tmuxpane.AllTUIPanes()
+	panes, err := tmuxpane.AllHMROptedInPanes()
 	if err != nil {
 		fmt.Printf("[hmr] list panes failed: %v\n", err)
+		return
+	}
+	if len(panes) == 0 {
+		fmt.Printf("[hmr] rebuilt; no opted-in panes (%s)\n", time.Since(t0).Round(time.Millisecond))
 		return
 	}
 	bin, _ := os.Executable()

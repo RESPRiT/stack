@@ -381,6 +381,54 @@ func AllTUIPanes() ([]TUIPaneInfo, error) {
 	return out, nil
 }
 
+// AllHMROptedInPanes returns @stack-tui panes whose @stack-hmr option
+// is "1" — i.e., panes the user has explicitly opted into HMR via the
+// TUI's `h` toggle. The HMR daemon respawns only these on a rebuild
+// so iterating in one project doesn't flicker a stack TUI in another.
+func AllHMROptedInPanes() ([]TUIPaneInfo, error) {
+	all, err := AllTUIPanes()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TUIPaneInfo, 0, len(all))
+	for _, p := range all {
+		if IsHMROptedIn(p.ID) {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// IsHMROptedIn reports whether the given pane has @stack-hmr set to
+// "1". Best-effort: any tmux error or non-"1" value reads as opted-out.
+func IsHMROptedIn(paneID string) bool {
+	out, err := exec.Command("tmux", "show-option", "-t", paneID, "-p", "-v", "@stack-hmr").Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "1"
+}
+
+// SetHMROptIn sets or unsets @stack-hmr on the given pane.
+func SetHMROptIn(paneID string, on bool) error {
+	val := "0"
+	if on {
+		val = "1"
+	}
+	return exec.Command("tmux", "set-option", "-t", paneID, "-p", "@stack-hmr", val).Run()
+}
+
+// AnyHMROptedIn is a convenience for the auto-stop lifecycle: returns
+// true iff at least one @stack-tui pane anywhere on the tmux server
+// has @stack-hmr=1.
+func AnyHMROptedIn() bool {
+	panes, err := AllHMROptedInPanes()
+	if err != nil {
+		return false
+	}
+	return len(panes) > 0
+}
+
 // CloseAll kills every @stack-tui pane in the current tmux session and
 // returns how many it closed. No-op outside tmux.
 func CloseAll() (int, error) {

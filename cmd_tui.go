@@ -101,7 +101,7 @@ func cmdTUI(args []string) error {
 
 	m := model{sessionID: id, sessionDir: dir, events: events}
 	m.reload()
-	m.hmrOn = hmrRunningSilent()
+	m.hmrOn = thisPaneHMROptedIn()
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
@@ -214,11 +214,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.maybeResize()
 			return m, waitForEvent(m.events)
 		case "h":
-			// Toggle the HMR daemon. Shelled out, async — if HMR is
-			// being turned on, the daemon's initial rebuild will
-			// respawn this very TUI; we just need the command to
-			// finish before that happens.
-			go toggleHMR()
+			// Toggle THIS pane's HMR opt-in (the @stack-hmr tmux
+			// option). Auto-manages the daemon lifecycle: starts it
+			// when this is the first opt-in, stops it when this was
+			// the last opt-out.
+			go togglePaneHMR()
 			return m, waitForEvent(m.events)
 		}
 	case tea.WindowSizeMsg:
@@ -233,24 +233,48 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForEvent(m.events)
 	case tickMsg:
 		m.advanceScroll()
-		m.hmrOn = hmrRunningSilent()
+		m.hmrOn = thisPaneHMROptedIn()
 		return m, tickCmd()
 	}
 	return m, nil
 }
 
-// toggleHMR is the body of the 'h' keypress: shells out to the very
-// same binary with the `hmr` subcommand (no arg = toggle).
-func toggleHMR() {
+// togglePaneHMR is the body of the 'h' keypress: flips this pane's
+// @stack-hmr opt-in and adjusts the daemon to match.
+//
+//   - opting in (0→1): start the daemon if not already running.
+//   - opting out (1→0): stop the daemon if no other pane is opted in.
+//
+// Lifecycle is "start on first opt-in, stop on last opt-out" so the
+// user never has to think about the daemon separately.
+func togglePaneHMR() {
+	paneID := os.Getenv("TMUX_PANE")
+	if paneID == "" {
+		return
+	}
+	on := !tmuxpane.IsHMROptedIn(paneID)
+	if err := tmuxpane.SetHMROptIn(paneID, on); err != nil {
+		return
+	}
 	bin, err := os.Executable()
 	if err != nil {
 		return
 	}
-	_ = exec.Command(bin, "hmr").Run()
+	if on {
+		// Just opted in. Make sure the daemon is up.
+		if !hmrRunningSilent() {
+			_ = exec.Command(bin, "hmr", "on").Run()
+		}
+		return
+	}
+	// Just opted out. Stop the daemon if no one else is using it.
+	if !tmuxpane.AnyHMROptedIn() && hmrRunningSilent() {
+		_ = exec.Command(bin, "hmr", "off").Run()
+	}
 }
 
 // hmrRunningSilent is like cmd_hmr.go's hmrRunning() but never cleans
-// up a stale PID file — pure read-only probe used for footer state.
+// up a stale PID file — pure read-only probe used by togglePaneHMR.
 func hmrRunningSilent() bool {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -269,6 +293,16 @@ func hmrRunningSilent() bool {
 		return false
 	}
 	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+// thisPaneHMROptedIn is a footer/tick probe for whether HMR is "on"
+// for the current pane (separate from whether the daemon is alive).
+func thisPaneHMROptedIn() bool {
+	paneID := os.Getenv("TMUX_PANE")
+	if paneID == "" {
+		return false
+	}
+	return tmuxpane.IsHMROptedIn(paneID)
 }
 
 // advanceScroll reacts to the per-frame tick. When the active scroll
