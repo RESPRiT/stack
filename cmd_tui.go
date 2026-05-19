@@ -199,6 +199,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c", "esc":
 			return m, tea.Quit
 		case "r":
+			// Inside tmux, `r` does a hard reload — respawns this
+			// pane with a fresh `stack tui` process so the pane
+			// picks up a new binary, fresh model state, and a clean
+			// view. Outside tmux there's no pane to respawn, so
+			// fall back to the in-process state reload.
+			if paneID := os.Getenv("TMUX_PANE"); paneID != "" {
+				bin, _ := os.Executable()
+				cmdLine := fmt.Sprintf("CLAUDE_CODE_SESSION_ID=%s exec %q tui", m.sessionID, bin)
+				go exec.Command("tmux", "respawn-pane", "-k", "-t", paneID, cmdLine).Run()
+				return m, nil
+			}
 			m.reload()
 			m.maybeResize()
 			return m, waitForEvent(m.events)
