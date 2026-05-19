@@ -25,10 +25,15 @@ const (
 	rightCols = 32
 	// minRightWidth is the floor below which a right-placed pane is
 	// unreadable (title row collides with the ID, topics render as a
-	// single ellipsis). Rapid-resize sequences let tmux's auto-resize
-	// clamp the -l rightCols split well below rightCols; when that
-	// happens we downgrade to top placement instead.
+	// single ellipsis). Sets the lower bound rightWidthFor can return.
 	minRightWidth = 16
+	// minWindowColsForRight is the smallest window width that admits a
+	// right-placed pane. Picked so rightWidthFor returns exactly
+	// minRightWidth at this size (winCols/4 == minRightWidth). Below
+	// this, decide() forces top placement so the right pane never
+	// spawns at an unreadable width — preempts the need for a
+	// state-dependent post-spawn downgrade.
+	minWindowColsForRight = minRightWidth * 4
 )
 
 // reflowWindow is the coalescing window for leading-edge + trailing
@@ -95,14 +100,17 @@ func rightWidthFor(winCols int) int {
 const cellAspect = 2.0
 
 // decide returns the placement for a window with the given dimensions.
-// Uses window dims (not the main pane's) because the main pane's
-// aspect depends on where the TUI sits — using it would flap on every
-// resize. Normalizes by cellAspect so the threshold reflects visual
-// perception rather than the raw character grid: visually wide → right,
-// visually tall-or-square → top. Single threshold (no hysteresis), so
-// near-square windows snap crisply between placements on resize.
+// Pure function of (cols, rows) — the right placement at a given size
+// is always the same, no hysteresis, no path dependence. Uses window
+// dims (not the main pane's) because the main pane's aspect depends
+// on where the TUI sits — using it would flap on every resize.
+// Normalizes by cellAspect so the threshold reflects visual perception
+// rather than the raw character grid: visually wide → right,
+// visually tall-or-square → top. Windows narrower than
+// minWindowColsForRight are forced top so the right pane never spawns
+// at an unreadable width.
 func decide(cols, rows int) placement {
-	if rows == 0 {
+	if rows == 0 || cols < minWindowColsForRight {
 		return placementTop
 	}
 	if float64(cols) >= float64(rows)*cellAspect {
@@ -141,6 +149,11 @@ func EnsureResizeHook() error {
 // EnsureRunning spawns a TUI pane for sessionID if and only if:
 //  1. we're inside tmux ($TMUX is set), AND
 //  2. no pane in the current window already has @stack-tui set.
+//
+// The split target is the largest non-TUI pane in the active window —
+// not necessarily the active pane. Splitting from a small active pane
+// could land the new TUI at a clamped width, breaking the
+// dims-determines-size guarantee.
 func EnsureRunning(sessionID string) error {
 	if !inTmux() {
 		return nil
@@ -160,7 +173,11 @@ func EnsureRunning(sessionID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = spawnAt(current.id, decide(winCols, winRows), winCols, sessionID, bin)
+	target := current
+	if main, err := findMainPane(current.windowID, ""); err == nil && main != nil {
+		target = *main
+	}
+	_, err = spawnAt(target.id, decide(winCols, winRows), winCols, sessionID, bin)
 	return err
 }
 
@@ -220,59 +237,45 @@ func reflowOnce() error {
 		}
 		cur := currentPlacement(tui)
 		desired := decide(winCols, winRows)
-		// If a right pane got clamped below the readability floor —
-		// typically a rapid-resize sequence where tmux auto-shrunk the
-		// pane and the previous reflow tick skipped because
-		// placement=desired — force a respawn and downgrade to top.
-		// Re-spawning Right would just hit the same clamp.
-		if cur == placementRight && tui.cols > 0 && tui.cols < minRightWidth {
-			desired = placementTop
-		}
-		if cur == desired {
+		if cur != desired {
+			if tui.sessionID == "" {
+				continue // can't relaunch without an id
+			}
+			// findMainPane is still the right *target* for the new
+			// split, even though it's no longer the source of dimensions.
+			main, err := findMainPane(tui.windowID, tui.id)
+			if err != nil || main == nil {
+				continue
+			}
+			_ = exec.Command("tmux", "kill-pane", "-t", tui.id).Run()
+			if _, err := spawnAt(main.id, desired, winCols, tui.sessionID, bin); err != nil {
+				return err
+			}
 			continue
 		}
-		if tui.sessionID == "" {
-			continue // can't relaunch without an id
-		}
-		// findMainPane is still the right *target* for the new split,
-		// even though it's no longer the source of dimensions.
-		main, err := findMainPane(tui.windowID, tui.id)
-		if err != nil || main == nil {
-			continue
-		}
-		_ = exec.Command("tmux", "kill-pane", "-t", tui.id).Run()
-		if _, err := spawnAt(main.id, desired, winCols, tui.sessionID, bin); err != nil {
-			return err
+		// Same placement. For right panes, force the canonical width so
+		// rapid-resize / tmux auto-scaling can't leave the pane at a
+		// non-canonical size — the panel is a pure function of window
+		// dims. Top-pane height stays stack-driven via maybeResize from
+		// inside the TUI process.
+		if desired == placementRight {
+			target := rightWidthFor(winCols)
+			if tui.cols != target {
+				_ = exec.Command("tmux", "resize-pane", "-t", tui.id, "-x", strconv.Itoa(target)).Run()
+			}
 		}
 	}
 	return nil
 }
 
 // spawnAt splits target with the given placement, runs `stack tui`
-// pinned to sessionID, and stamps the new pane with the user options we
-// rely on for detection and recovery. winCols sizes a right placement
-// against the 25 % cap (see rightWidthFor); pass 0 to fall back to
-// rightCols. A right pane that tmux clamps below minRightWidth
-// (rapid-resize squash) is killed and retried as top.
+// pinned to sessionID, and stamps the new pane with the user options
+// we rely on for detection and recovery. winCols sizes a right
+// placement against the 25 % cap (see rightWidthFor); pass 0 to fall
+// back to rightCols. decide() guarantees winCols ≥ minWindowColsForRight
+// before returning placementRight, so the resulting right pane is
+// always ≥ minRightWidth — no post-spawn fallback needed.
 func spawnAt(target string, p placement, winCols int, sessionID, bin string) (string, error) {
-	paneID, err := splitWindow(target, p, winCols, sessionID, bin)
-	if err != nil {
-		return "", err
-	}
-	if p == placementRight {
-		if w := paneWidth(paneID); w > 0 && w < minRightWidth {
-			_ = exec.Command("tmux", "kill-pane", "-t", paneID).Run()
-			return splitWindow(target, placementTop, winCols, sessionID, bin)
-		}
-	}
-	return paneID, nil
-}
-
-// splitWindow runs tmux split-window for the given placement and
-// stamps the new pane with @stack-* options. Factored out so spawnAt
-// can call it twice on the right→top downgrade path without
-// duplicating the stamping.
-func splitWindow(target string, p placement, winCols int, sessionID, bin string) (string, error) {
 	size := topRows
 	if p == placementRight {
 		size = rightWidthFor(winCols)
@@ -302,16 +305,6 @@ func splitWindow(target string, p placement, winCols int, sessionID, bin string)
 	return paneID, nil
 }
 
-// paneWidth returns the column count of the given pane, or 0 if the
-// query fails. Used post-spawn to detect tmux clamping.
-func paneWidth(paneID string) int {
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{pane_width}").Output()
-	if err != nil {
-		return 0
-	}
-	n, _ := strconv.Atoi(strings.TrimSpace(string(out)))
-	return n
-}
 
 type paneInfo struct {
 	id         string
