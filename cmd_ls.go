@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"strings"
 
 	"stack/internal/session"
 	"stack/internal/store"
@@ -12,6 +13,7 @@ import (
 func cmdLs(args []string) error {
 	fs := flag.NewFlagSet("ls", flag.ContinueOnError)
 	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")
+	verbose := fs.Bool("v", false, "also print each topic's context on the following line")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -38,7 +40,18 @@ func cmdLs(args []string) error {
 		if i == len(s.Topics)-1 {
 			marker = "▶ "
 		}
-		fmt.Printf("%s%s\n", marker, s.Topics[i])
+		// Context-bearing items get a trailing · so the user can tell
+		// at a glance which entries carry attached notes.
+		ctxMark := ""
+		if s.Topics[i].Context != "" {
+			ctxMark = " ·"
+		}
+		fmt.Printf("%s%s%s\n", marker, s.Topics[i].Topic, ctxMark)
+		if *verbose && s.Topics[i].Context != "" {
+			for _, line := range strings.Split(s.Topics[i].Context, "\n") {
+				fmt.Printf("    %s\n", line)
+			}
+		}
 	}
 	return nil
 }

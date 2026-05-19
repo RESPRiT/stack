@@ -8,7 +8,7 @@ import (
 // Version is the user-visible release marker. Shown in the TUI header
 // and by `stack --version`. Bumped manually per release; pre-1.0 while
 // the surface is still iterating.
-const Version = "0.1.23"
+const Version = "0.1.24"
 
 const usage = `stack — a topic stack for coding-agent sessions.
 
@@ -16,9 +16,13 @@ Usage:
   stack                    alias for stack ls (default action)
   stack push <topic>...    push a topic onto the current session's stack
   stack pop                pop the top topic
-  stack ls                 list the stack, top first
+  stack ls [-v]            list the stack, top first; -v also prints each topic's context
   stack edit rename <pos> <text>   rename the topic at position (1-based top-first, or top|bottom)
   stack edit move <from> <to>      reorder a topic; positions as above
+  stack context <pos>              print the context attached to the topic at <pos>
+  stack context <pos> <text>...    set the context inline (positional args joined with spaces)
+  stack context <pos> -            read the context from stdin
+  stack context <pos> --clear      remove the context (item reverts to a bare string on disk)
   stack tui                live TUI view of the stack
   stack open               spawn the TUI pane (inside tmux), idempotent
   stack close              dismiss any open TUI pane(s) for this session
@@ -66,6 +70,8 @@ func main() {
 		err = cmdHMR(args)
 	case "hook":
 		err = cmdHook(args)
+	case "context":
+		err = cmdContext(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	case "version", "--version", "-v":

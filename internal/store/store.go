@@ -3,9 +3,15 @@
 // The on-disk shape is intentionally trivial — a JSON document with a
 // list of topics where the last element is the top of the stack — so a
 // human (or a coding agent) can inspect and edit it directly.
+//
+// Each entry in `topics` is either a bare string (just the topic, no
+// context) or a `{"topic": "...", "context": "..."}` object. Context-
+// less items stay as bare strings on save so hand-editing remains easy
+// for the common case.
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,8 +20,60 @@ import (
 	"time"
 )
 
+// MaxContextBytes is the soft size cap for a single Item's Context.
+// Saves above this size still proceed; a warning is written to
+// os.Stderr so the user notices the bloat.
+const MaxContextBytes = 1024
+
+// Item is one entry on the stack: the topic text plus an optional
+// free-form context the user (or agent) attaches for future reference.
+// An Item with empty Context marshals as a bare JSON string so the
+// stack file stays hand-editable for the common case.
+type Item struct {
+	Topic   string
+	Context string
+}
+
+// MarshalJSON emits a bare string when no context is set, or a
+// {"topic", "context"} object when one is. The asymmetric shape keeps
+// short, context-less stacks readable on disk.
+func (i Item) MarshalJSON() ([]byte, error) {
+	if i.Context == "" {
+		return json.Marshal(i.Topic)
+	}
+	return json.Marshal(struct {
+		Topic   string `json:"topic"`
+		Context string `json:"context"`
+	}{i.Topic, i.Context})
+}
+
+// UnmarshalJSON accepts either a bare string (legacy / context-less)
+// or an object with topic + context. Anything else is a parse error.
+func (i *Item) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) > 0 && data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		i.Topic = s
+		i.Context = ""
+		return nil
+	}
+	var obj struct {
+		Topic   string `json:"topic"`
+		Context string `json:"context"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return fmt.Errorf("stack item: expected string or {topic, context} object: %w", err)
+	}
+	i.Topic = obj.Topic
+	i.Context = obj.Context
+	return nil
+}
+
 type Stack struct {
-	Topics    []string  `json:"topics"`
+	Topics    []Item    `json:"topics"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -30,7 +88,7 @@ func Load(sessionDir string) (Stack, error) {
 	b, err := os.ReadFile(p)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Stack{Topics: []string{}}, nil
+			return Stack{Topics: []Item{}}, nil
 		}
 		return Stack{}, fmt.Errorf("read %s: %w", p, err)
 	}
@@ -39,20 +97,29 @@ func Load(sessionDir string) (Stack, error) {
 		return Stack{}, fmt.Errorf("parse %s: %w", p, err)
 	}
 	if s.Topics == nil {
-		s.Topics = []string{}
+		s.Topics = []Item{}
 	}
 	return s, nil
 }
 
-// save writes the stack atomically: write to a tempfile in the same dir,
-// fsync, then rename over the target. The rename is atomic on POSIX and
-// guarantees a TUI fsnotify watcher sees exactly one Write/Create event
-// per save instead of a half-written file.
+// save writes the stack atomically: write to a tempfile in the same
+// dir, fsync, then rename over the target. The rename is atomic on
+// POSIX and guarantees a TUI fsnotify watcher sees exactly one
+// Write/Create event per save instead of a half-written file.
+//
+// Any Item.Context above MaxContextBytes emits a single-line warning
+// to os.Stderr — the save still proceeds (advisory cap, not enforced).
 func save(sessionDir string, s Stack) error {
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", sessionDir, err)
 	}
 	s.UpdatedAt = time.Now().UTC()
+	for _, it := range s.Topics {
+		if n := len(it.Context); n > MaxContextBytes {
+			fmt.Fprintf(os.Stderr, "stack: warning: context for %q is %d bytes (cap %d)\n",
+				it.Topic, n, MaxContextBytes)
+		}
+	}
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
@@ -86,25 +153,25 @@ func Push(sessionDir, topic string) (Stack, error) {
 	if err != nil {
 		return Stack{}, err
 	}
-	s.Topics = append(s.Topics, topic)
+	s.Topics = append(s.Topics, Item{Topic: topic})
 	if err := save(sessionDir, s); err != nil {
 		return Stack{}, err
 	}
 	return s, nil
 }
 
-func Pop(sessionDir string) (popped string, after Stack, err error) {
+func Pop(sessionDir string) (popped Item, after Stack, err error) {
 	s, err := Load(sessionDir)
 	if err != nil {
-		return "", Stack{}, err
+		return Item{}, Stack{}, err
 	}
 	if len(s.Topics) == 0 {
-		return "", s, ErrEmpty
+		return Item{}, s, ErrEmpty
 	}
 	popped = s.Topics[len(s.Topics)-1]
 	s.Topics = s.Topics[:len(s.Topics)-1]
 	if err := save(sessionDir, s); err != nil {
-		return "", Stack{}, err
+		return Item{}, Stack{}, err
 	}
 	return popped, s, nil
 }
@@ -120,7 +187,7 @@ func posToArrayIndex(pos, n int) (int, error) {
 }
 
 // Rename replaces the topic at user-facing position pos with newText.
-// pos is 1-based top-first.
+// The context (if any) is preserved. pos is 1-based top-first.
 func Rename(sessionDir string, pos int, newText string) (Stack, error) {
 	s, err := Load(sessionDir)
 	if err != nil {
@@ -133,7 +200,7 @@ func Rename(sessionDir string, pos int, newText string) (Stack, error) {
 	if err != nil {
 		return s, err
 	}
-	s.Topics[idx] = newText
+	s.Topics[idx].Topic = newText
 	if err := save(sessionDir, s); err != nil {
 		return Stack{}, err
 	}
@@ -141,7 +208,8 @@ func Rename(sessionDir string, pos int, newText string) (Stack, error) {
 }
 
 // Move re-orders the topic at position from to position to. Both are
-// 1-based top-first. A no-op (from == to) succeeds silently.
+// 1-based top-first. A no-op (from == to) succeeds silently. Context
+// travels with the item.
 func Move(sessionDir string, from, to int) (Stack, error) {
 	s, err := Load(sessionDir)
 	if err != nil {
@@ -163,15 +231,34 @@ func Move(sessionDir string, from, to int) (Stack, error) {
 		return s, nil
 	}
 	item := s.Topics[fi]
-	without := append([]string(nil), s.Topics[:fi]...)
+	without := append([]Item(nil), s.Topics[:fi]...)
 	without = append(without, s.Topics[fi+1:]...)
-	// ti was computed against the original length; it remains a valid
-	// insertion index in the shorter slice because the insertion semantics
-	// give the moved item exactly that array index in the resulting slice.
 	if ti > len(without) {
 		ti = len(without)
 	}
-	s.Topics = append(without[:ti], append([]string{item}, without[ti:]...)...)
+	s.Topics = append(without[:ti], append([]Item{item}, without[ti:]...)...)
+	if err := save(sessionDir, s); err != nil {
+		return Stack{}, err
+	}
+	return s, nil
+}
+
+// SetContext sets the context for the item at user-facing 1-based
+// top-first position pos. An empty string clears the context (the item
+// reverts to a bare string on disk).
+func SetContext(sessionDir string, pos int, context string) (Stack, error) {
+	s, err := Load(sessionDir)
+	if err != nil {
+		return Stack{}, err
+	}
+	if len(s.Topics) == 0 {
+		return s, ErrEmpty
+	}
+	idx, err := posToArrayIndex(pos, len(s.Topics))
+	if err != nil {
+		return s, err
+	}
+	s.Topics[idx].Context = context
 	if err := save(sessionDir, s); err != nil {
 		return Stack{}, err
 	}

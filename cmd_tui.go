@@ -147,7 +147,7 @@ func startWatcher(dir string, ch chan<- tea.Msg) (*fsnotify.Watcher, error) {
 type model struct {
 	sessionID    string
 	sessionDir   string
-	topics       []string
+	topics       []store.Item
 	updatedAt    time.Time
 	width        int
 	height       int
@@ -156,6 +156,7 @@ type model struct {
 	scrollAnchor   time.Time  // start of the current scroll cycle
 	lastScrollMode scrollMode // last observed mode; mode changes reset the anchor
 	hmrOn          bool       // refreshed from ~/.stack/hmr.pid on each tick
+	contextView    bool       // true while the `c` keybind is showing the top item's context
 }
 
 type reloadMsg struct{}
@@ -196,8 +197,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q", "ctrl+c", "esc":
+		case "esc":
+			// Esc backs out of context view first; only quits when
+			// context view is already off.
+			if m.contextView {
+				m.contextView = false
+				return m, waitForEvent(m.events)
+			}
 			return m, tea.Quit
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		case "c":
+			// Toggle the per-pane context view (shows the top item's
+			// context if it has one). No-op when there's no top item.
+			if len(m.topics) > 0 {
+				m.contextView = !m.contextView
+			}
+			return m, waitForEvent(m.events)
 		case "r":
 			// Inside tmux, `r` does a hard reload — respawns this
 			// pane with a fresh `stack tui` process so the pane
@@ -403,7 +419,7 @@ func (m *model) maxScrollOffset() int {
 	}
 	max := 0
 	for _, t := range m.topics {
-		l := len([]rune(t))
+		l := len([]rune(t.Topic))
 		if d := l - w; d > max {
 			max = d
 		}
@@ -436,7 +452,7 @@ func (m model) horizontalOffset(topicIdx, topicRunes int) int {
 	}
 	phaseElapsed := elapsed - scrollStable
 	for _, idx := range m.overlongTopicIndices() {
-		runes := len([]rune(m.topics[idx]))
+		runes := len([]rune(m.topics[idx].Topic))
 		topicMaxOff := runes - w
 		if topicMaxOff <= 0 {
 			continue
@@ -470,7 +486,7 @@ func (m model) overlongTopicIndices() []int {
 	}
 	var out []int
 	for i := len(m.topics) - 1; i >= 0; i-- {
-		if len([]rune(m.topics[i])) > w {
+		if len([]rune(m.topics[i].Topic)) > w {
 			out = append(out, i)
 		}
 	}
@@ -489,7 +505,7 @@ func (m model) horizontalCycleEnd() time.Duration {
 	total := time.Duration(0)
 	any := false
 	for _, t := range m.topics {
-		runes := len([]rune(t))
+		runes := len([]rune(t.Topic))
 		if runes <= w {
 			continue
 		}
@@ -675,6 +691,25 @@ func (m model) View() string {
 		// before the footer falls out naturally; the empty branch has
 		// to add one explicitly to keep that blank in the layout.
 		b.WriteString("\n")
+	} else if m.contextView {
+		// Context view: replace the topics list with the top item's
+		// context. Long contexts wrap to the pane width; truncation is
+		// the caller's problem to scroll back to (the panel is meant
+		// for a glance, not a reader). An empty context renders a
+		// dim placeholder so the user understands why nothing's there.
+		top := m.topics[len(m.topics)-1]
+		header := topStyle.Render("▶ "+top.Topic) + subtleStyle.Render("  · context")
+		b.WriteString(header + "\n")
+		body := top.Context
+		if body == "" {
+			b.WriteString(subtleStyle.Render("(no context attached — set with `stack context top <text>`)"))
+			b.WriteString("\n")
+		} else {
+			for _, line := range strings.Split(body, "\n") {
+				b.WriteString(itemStyle.Render(line))
+				b.WriteString("\n")
+			}
+		}
 	} else {
 		renderW := m.topicRenderWidth()
 
@@ -690,23 +725,33 @@ func (m model) View() string {
 		}
 
 		for i := topI; i >= botI; i-- {
-			runes := []rune(m.topics[i])
+			runes := []rune(m.topics[i].Topic)
 			off := 0
 			if mode == scrollHorizontal {
 				off = m.horizontalOffset(i, len(runes))
 			}
 			visible := renderTopicRunes(runes, off, renderW)
+			ctxMark := ""
+			if m.topics[i].Context != "" {
+				ctxMark = subtleStyle.Render(" ·")
+			}
 			if i == len(m.topics)-1 {
-				b.WriteString(topStyle.Render("▶ " + visible))
+				b.WriteString(topStyle.Render("▶ "+visible) + ctxMark)
 			} else {
-				b.WriteString(itemStyle.Render("  " + visible))
+				b.WriteString(itemStyle.Render("  "+visible) + ctxMark)
 			}
 			b.WriteString("\n")
 		}
 	}
 
 	b.WriteString("\n")
-	b.WriteString(subtleStyle.Render("r reload · h "))
+	b.WriteString(subtleStyle.Render("r reload · "))
+	if m.contextView {
+		b.WriteString(topStyle.Render("c context"))
+	} else {
+		b.WriteString(subtleStyle.Render("c context"))
+	}
+	b.WriteString(subtleStyle.Render(" · h "))
 	if m.hmrOn {
 		b.WriteString(topStyle.Render("hmr on"))
 	} else {
