@@ -20,7 +20,6 @@ When you finish a sub-task that sits on top of the stack, pop it without waiting
 Pop when:
 
 - The sub-task that defines the current top is *complete* — committed, validated, or explicitly handed off.
-- The user redirects to something incompatible with the current focus and the existing top is no longer reachable.
 
 Don't pop just because:
 
