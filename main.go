@@ -8,11 +8,12 @@ import (
 // Version is the user-visible release marker. Shown in the TUI header
 // and by `stack --version`. Bumped manually per release; pre-1.0 while
 // the surface is still iterating.
-const Version = "0.1.13"
+const Version = "0.1.14"
 
 const usage = `stack — a topic stack for coding-agent sessions.
 
 Usage:
+  stack                    alias for stack ls (default action)
   stack push <topic>...    push a topic onto the current session's stack
   stack pop                pop the top topic
   stack ls                 list the stack, top first
@@ -31,9 +32,15 @@ most-recently-modified session under ~/.stack/sessions/.
 `
 
 func main() {
+	// Bare `stack` aliases to `stack ls` — the most common interactive
+	// thing to do is glance at the current stack; making that the
+	// default beats printing usage.
 	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+		if err := cmdLs(nil); err != nil {
+			fmt.Fprintf(os.Stderr, "stack: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	cmd, args := os.Args[1], os.Args[2:]
