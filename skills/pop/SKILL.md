@@ -1,5 +1,7 @@
 ---
-description: Pop the top topic from the current session's stack
+name: pop
+description: Pop the top topic from the current Claude Code session's stack
+disable-model-invocation: true
 ---
 
 Run the following command via the Bash tool, then relay its stdout verbatim to the user.

@@ -1,6 +1,8 @@
 ---
-description: Push a topic onto the current session's stack
+name: push
+description: Push a topic onto the current Claude Code session's stack
 argument-hint: <topic>
+disable-model-invocation: true
 ---
 
 Run the following command via the Bash tool, then relay its stdout verbatim to the user.
