@@ -25,19 +25,38 @@ import (
 // fsnotify ops, and the consumer drains one per Update tick.
 const eventBuf = 16
 
-// Scroll animation timings — applied per cycle when the topic list
-// exceeds the available render width.
+// Scroll animation timings. Horizontal and vertical modes share the
+// initial stable hold; the per-step rate and end-hold differ. Modes are
+// mutually exclusive (see currentScrollMode).
 const (
 	// scrollStable is the initial hold at offset 0 before scrolling begins.
 	scrollStable = 10 * time.Second
-	// scrollCharsPerSec controls how fast text glides right.
+	// scrollCharsPerSec controls horizontal-mode glide rate.
 	scrollCharsPerSec = 5
-	// scrollHoldEnd is the pause after a topic has scrolled to its end
-	// before the cycle resets to offset 0.
+	// scrollHoldEnd is the pause after horizontal scrolling reaches the
+	// end before the cycle resets to offset 0.
 	scrollHoldEnd = 10 * time.Second
+	// scrollVStep advances the vertical view by one row every this often.
+	scrollVStep = 30 * time.Second
+	// scrollVHold is the pause at the bottom of the list before the
+	// vertical cycle restarts.
+	scrollVHold = 30 * time.Second
 	// tickInterval drives the scroll animation. 5 chars/sec implies a
 	// 200 ms tick keeps the motion smooth (one char per tick).
 	tickInterval = 200 * time.Millisecond
+
+	// View() chrome + tail gap. The tail gap is the user-visible 2-row
+	// space between the footer and the panel divider; chrome is title +
+	// blank + blank + footer.
+	chromeAndGapRows = 6
+)
+
+type scrollMode int
+
+const (
+	scrollNone scrollMode = iota
+	scrollHorizontal
+	scrollVertical
 )
 
 func cmdTUI(args []string) error {
@@ -131,8 +150,9 @@ type model struct {
 	width        int
 	height       int
 	err          error
-	events       chan tea.Msg
-	scrollAnchor time.Time // start of the current horizontal-scroll cycle
+	events         chan tea.Msg
+	scrollAnchor   time.Time  // start of the current scroll cycle
+	lastScrollMode scrollMode // last observed mode; mode changes reset the anchor
 }
 
 type reloadMsg struct{}
@@ -197,19 +217,94 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// advanceScroll resets the scroll cycle once the longest topic has
-// finished its post-scroll hold; the next tick after that will be
-// rendered with offset 0.
+// advanceScroll reacts to the per-frame tick. When the active scroll
+// mode changes (e.g., the stack grew past the visible-rows budget),
+// the anchor resets so the new mode starts cleanly at phase zero.
+// Otherwise, the anchor is rolled forward to the next cycle once the
+// current mode's hold-end elapses.
 func (m *model) advanceScroll() {
-	maxOff := m.maxScrollOffset()
-	if maxOff <= 0 {
+	mode := m.currentScrollMode()
+	if mode != m.lastScrollMode {
+		m.scrollAnchor = time.Now()
+		m.lastScrollMode = mode
 		return
 	}
-	scrollDur := time.Duration(maxOff) * time.Second / scrollCharsPerSec
-	cycleEnd := scrollStable + scrollDur + scrollHoldEnd
-	if time.Since(m.scrollAnchor) > cycleEnd {
-		m.scrollAnchor = time.Now()
+	switch mode {
+	case scrollHorizontal:
+		maxOff := m.maxScrollOffset()
+		if maxOff <= 0 {
+			return
+		}
+		scrollDur := time.Duration(maxOff) * time.Second / scrollCharsPerSec
+		cycleEnd := scrollStable + scrollDur + scrollHoldEnd
+		if time.Since(m.scrollAnchor) > cycleEnd {
+			m.scrollAnchor = time.Now()
+		}
+	case scrollVertical:
+		maxOff := m.maxVerticalOffset()
+		if maxOff <= 0 {
+			return
+		}
+		scrollDur := time.Duration(maxOff) * scrollVStep
+		cycleEnd := scrollStable + scrollDur + scrollVHold
+		if time.Since(m.scrollAnchor) > cycleEnd {
+			m.scrollAnchor = time.Now()
+		}
 	}
+}
+
+// currentScrollMode picks the active mode for the current frame:
+// vertical takes priority when the topic count exceeds the visible
+// content rows; otherwise horizontal activates when any topic exceeds
+// the render width; otherwise none.
+func (m model) currentScrollMode() scrollMode {
+	if m.maxVerticalOffset() > 0 {
+		return scrollVertical
+	}
+	if m.maxScrollOffset() > 0 {
+		return scrollHorizontal
+	}
+	return scrollNone
+}
+
+// contentRows is the number of topic lines the pane can display, after
+// subtracting chrome and the tail gap.
+func (m model) contentRows() int {
+	r := m.height - chromeAndGapRows
+	if r < 0 {
+		return 0
+	}
+	return r
+}
+
+// maxVerticalOffset is the number of topics that won't fit on screen
+// when the topic list is rendered top-down from the head. Zero means
+// the whole stack fits.
+func (m model) maxVerticalOffset() int {
+	off := len(m.topics) - m.contentRows()
+	if off < 0 {
+		return 0
+	}
+	return off
+}
+
+// verticalOffset returns the current vertical-scroll position in rows.
+// Stable for the first scrollStable; advances one row every scrollVStep;
+// clamps at maxVerticalOffset() during the end-of-list hold.
+func (m model) verticalOffset() int {
+	maxOff := m.maxVerticalOffset()
+	if maxOff <= 0 {
+		return 0
+	}
+	elapsed := time.Since(m.scrollAnchor)
+	if elapsed < scrollStable {
+		return 0
+	}
+	step := int((elapsed - scrollStable) / scrollVStep)
+	if step > maxOff {
+		return maxOff
+	}
+	return step
 }
 
 // maxScrollOffset returns the largest offset needed across all topics to
@@ -377,14 +472,30 @@ func (m model) View() string {
 		b.WriteString("\n\n")
 	}
 
-	switch len(m.topics) {
-	case 0:
+	if len(m.topics) == 0 {
 		b.WriteString(subtleStyle.Render("(empty — push a topic to get started)"))
-	default:
+	} else {
+		mode := m.currentScrollMode()
 		renderW := m.topicRenderWidth()
-		for i := len(m.topics) - 1; i >= 0; i-- {
+
+		// Pick the index range to render. Top-of-stack first.
+		topI := len(m.topics) - 1
+		botI := 0
+		if mode == scrollVertical {
+			vOff := m.verticalOffset()
+			topI -= vOff
+			botI = topI - m.contentRows() + 1
+			if botI < 0 {
+				botI = 0
+			}
+		}
+
+		for i := topI; i >= botI; i-- {
 			runes := []rune(m.topics[i])
-			off := m.horizontalOffset(len(runes))
+			off := 0
+			if mode == scrollHorizontal {
+				off = m.horizontalOffset(len(runes))
+			}
 			visible := sliceRunes(runes, off, renderW)
 			if i == len(m.topics)-1 {
 				b.WriteString(topStyle.Render("▶ " + visible))
