@@ -11,6 +11,8 @@ Usage:
   stack push <topic>...    push a topic onto the current session's stack
   stack pop                pop the top topic
   stack ls                 list the stack, top first
+  stack edit rename <pos> <text>   rename the topic at position (1-based top-first, or top|bottom)
+  stack edit move <from> <to>      reorder a topic; positions as above
   stack tui                live TUI view of the stack
   stack open               spawn the TUI pane (inside tmux), idempotent
   stack close              dismiss any open TUI pane(s) for this session
@@ -36,6 +38,8 @@ func main() {
 		err = cmdPop(args)
 	case "ls", "list":
 		err = cmdLs(args)
+	case "edit":
+		err = cmdEdit(args)
 	case "tui":
 		err = cmdTUI(args)
 	case "open":

@@ -108,3 +108,72 @@ func Pop(sessionDir string) (popped string, after Stack, err error) {
 	}
 	return popped, s, nil
 }
+
+// posToArrayIndex maps a user-facing 1-based top-first position to the
+// on-disk 0-based bottom-first array index. Pos 1 (top) -> n-1; pos n
+// (bottom) -> 0. Out-of-range positions return an error.
+func posToArrayIndex(pos, n int) (int, error) {
+	if pos < 1 || pos > n {
+		return 0, fmt.Errorf("position %d out of range (stack has %d item(s))", pos, n)
+	}
+	return n - pos, nil
+}
+
+// Rename replaces the topic at user-facing position pos with newText.
+// pos is 1-based top-first.
+func Rename(sessionDir string, pos int, newText string) (Stack, error) {
+	s, err := Load(sessionDir)
+	if err != nil {
+		return Stack{}, err
+	}
+	if len(s.Topics) == 0 {
+		return s, ErrEmpty
+	}
+	idx, err := posToArrayIndex(pos, len(s.Topics))
+	if err != nil {
+		return s, err
+	}
+	s.Topics[idx] = newText
+	if err := save(sessionDir, s); err != nil {
+		return Stack{}, err
+	}
+	return s, nil
+}
+
+// Move re-orders the topic at position from to position to. Both are
+// 1-based top-first. A no-op (from == to) succeeds silently.
+func Move(sessionDir string, from, to int) (Stack, error) {
+	s, err := Load(sessionDir)
+	if err != nil {
+		return Stack{}, err
+	}
+	n := len(s.Topics)
+	if n == 0 {
+		return s, ErrEmpty
+	}
+	fi, err := posToArrayIndex(from, n)
+	if err != nil {
+		return s, err
+	}
+	ti, err := posToArrayIndex(to, n)
+	if err != nil {
+		return s, err
+	}
+	if fi == ti {
+		return s, nil
+	}
+	item := s.Topics[fi]
+	without := append([]string(nil), s.Topics[:fi]...)
+	without = append(without, s.Topics[fi+1:]...)
+	// ti was computed against the original length; it remains a valid
+	// insertion index in the shorter slice because the insertion semantics
+	// give the moved item exactly that array index in the resulting slice.
+	if ti > len(without) {
+		ti = len(without)
+	}
+	s.Topics = append(without[:ti], append([]string{item}, without[ti:]...)...)
+	if err := save(sessionDir, s); err != nil {
+		return Stack{}, err
+	}
+	return s, nil
+}
