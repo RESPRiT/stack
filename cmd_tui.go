@@ -427,16 +427,19 @@ func (m *model) maybeResize() {
 // stack content plus chrome — title, blank, topics (or empty
 // placeholder), blank, footer — with a two-row tail gap below the
 // footer so the pane never feels crammed against the divider.
-// Clamped to never go below 6 rows or above 35 % of the window.
+// Clamped to never go below 7 rows or above 35 % of the window.
 func desiredPaneHeight(stackLen, windowRows int) int {
 	const (
-		// View() renders 4 chrome rows around the topics list:
-		// title, blank, blank, footer. The +1 here is the tail gap;
-		// tmux contributes the second gap row (an off-by-one in
-		// resize-pane -y vs reported pane_height).
-		chromeRows   = 5
+		// View() renders 4 chrome rows around the topics list (title,
+		// blank, blank, footer) plus a 2-row tail gap. Both contribute
+		// to the chrome-and-gap budget that contentRows() subtracts.
+		// Must stay in sync with chromeAndGapRows.
+		chromeRows   = chromeAndGapRows
 		emptyContent = 1 // "(empty — push a topic …)"
-		minPaneRows  = 6
+		// minPaneRows is one above chromeRows so contentRows() is
+		// always ≥ 1 — otherwise the topic loop has zero rows to
+		// render into and the pane shows blank between the chrome.
+		minPaneRows = chromeAndGapRows + 1
 		// maxWindowPercent caps the pane at this fraction of the
 		// window's row count. 35 leaves the main pane the majority of
 		// the screen even when the stack is deep enough to trigger
