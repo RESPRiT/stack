@@ -1,8 +1,7 @@
 ---
 name: push
-description: Push a topic onto the current Claude Code session's stack
+description: Push a topic onto the current Claude Code session's stack so the agent (and any live `stack tui` panel) knows what's now the active focus. Invoke when starting a discrete sub-task whose progress should be visible in the stack.
 argument-hint: <topic>
-disable-model-invocation: true
 ---
 
 Run the following command via the Bash tool, then relay its stdout verbatim to the user.

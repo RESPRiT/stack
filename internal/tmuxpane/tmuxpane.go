@@ -278,6 +278,30 @@ func inTmux() bool {
 	return err == nil
 }
 
+// TUIPaneExists is the exported form of tuiPaneExists for callers
+// outside this package that want to ask "is there already a TUI pane
+// in the current window?" without spawning one.
+func TUIPaneExists() (bool, error) { return tuiPaneExists() }
+
+// CloseAll kills every @stack-tui pane in the current tmux session and
+// returns how many it closed. No-op outside tmux.
+func CloseAll() (int, error) {
+	if !inTmux() {
+		return 0, nil
+	}
+	tuis, err := findTUIPanes()
+	if err != nil {
+		return 0, err
+	}
+	closed := 0
+	for _, tui := range tuis {
+		if err := exec.Command("tmux", "kill-pane", "-t", tui.id).Run(); err == nil {
+			closed++
+		}
+	}
+	return closed, nil
+}
+
 func tuiPaneExists() (bool, error) {
 	out, err := exec.Command("tmux", "list-panes", "-F", "#{@stack-tui}").Output()
 	if err != nil {

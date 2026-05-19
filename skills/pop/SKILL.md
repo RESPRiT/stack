@@ -1,7 +1,6 @@
 ---
 name: pop
-description: Pop the top topic from the current Claude Code session's stack
-disable-model-invocation: true
+description: Pop the top topic from the current Claude Code session's stack. Invoke when finishing the sub-task currently on top — the next-down topic (or empty) becomes the new focus.
 ---
 
 Run the following command via the Bash tool, then relay its stdout verbatim to the user.

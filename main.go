@@ -12,6 +12,8 @@ Usage:
   stack pop                pop the top topic
   stack ls                 list the stack, top first
   stack tui                live TUI view of the stack
+  stack open               spawn the TUI pane (inside tmux), idempotent
+  stack close              dismiss any open TUI pane(s) for this session
   stack reflow             reposition the TUI pane for the current terminal size
   stack help               show this help
 
@@ -36,6 +38,10 @@ func main() {
 		err = cmdLs(args)
 	case "tui":
 		err = cmdTUI(args)
+	case "open":
+		err = cmdOpen(args)
+	case "close":
+		err = cmdClose(args)
 	case "reflow":
 		err = cmdReflow(args)
 	case "help", "-h", "--help":
