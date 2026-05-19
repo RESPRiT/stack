@@ -376,13 +376,21 @@ func CloseAll() (int, error) {
 	return closed, nil
 }
 
-// CloseForSession kills @stack-tui panes in the current tmux session
-// whose @stack-session option matches sessionID. Used by the
-// SessionStart=clear hook so /clear in one Claude Code instance leaves
-// other instances' panes (in the same tmux session) untouched.
-func CloseForSession(sessionID string) (int, error) {
-	if !inTmux() || sessionID == "" {
+// CloseInCurrentWindow kills @stack-tui panes that live in the same
+// tmux window as the caller (resolved via $TMUX_PANE → window). Used
+// by the SessionStart=clear hook: matching on session_id breaks
+// because Claude Code rolls a new session_id on /clear, so we scope by
+// window-proximity to the firing Claude Code pane instead. Panes
+// belonging to other Claude Code instances (different windows) are
+// left untouched. If $TMUX_PANE isn't set, falls back to closing every
+// @stack-tui pane in the current tmux session.
+func CloseInCurrentWindow() (int, error) {
+	if !inTmux() {
 		return 0, nil
+	}
+	myWindow, err := currentWindowID()
+	if err != nil {
+		return 0, err
 	}
 	tuis, err := findTUIPanes()
 	if err != nil {
@@ -390,7 +398,7 @@ func CloseForSession(sessionID string) (int, error) {
 	}
 	closed := 0
 	for _, tui := range tuis {
-		if tui.sessionID != sessionID {
+		if myWindow != "" && tui.windowID != myWindow {
 			continue
 		}
 		if err := exec.Command("tmux", "kill-pane", "-t", tui.id).Run(); err == nil {
@@ -398,6 +406,23 @@ func CloseForSession(sessionID string) (int, error) {
 		}
 	}
 	return closed, nil
+}
+
+// currentWindowID returns the tmux window id containing the caller's
+// pane (preferring $TMUX_PANE, falling back to the active pane).
+// Returns "" if no window can be resolved — callers should treat that
+// as "no scoping" rather than an error.
+func currentWindowID() (string, error) {
+	args := []string{"display-message", "-p"}
+	if target := os.Getenv("TMUX_PANE"); target != "" {
+		args = append(args, "-t", target)
+	}
+	args = append(args, "#{window_id}")
+	out, err := exec.Command("tmux", args...).Output()
+	if err != nil {
+		return "", fmt.Errorf("display-message window: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // RetargetForSession retargets any @stack-tui pane in the current tmux
@@ -413,6 +438,7 @@ func RetargetForSession(newSessionID string) (int, error) {
 	if !inTmux() || newSessionID == "" {
 		return 0, nil
 	}
+	myWindow, _ := currentWindowID()
 	tuis, err := findTUIPanes()
 	if err != nil {
 		return 0, err
@@ -423,6 +449,9 @@ func RetargetForSession(newSessionID string) (int, error) {
 	}
 	retargeted := 0
 	for _, tui := range tuis {
+		if myWindow != "" && tui.windowID != myWindow {
+			continue
+		}
 		if tui.sessionID == newSessionID {
 			continue
 		}
