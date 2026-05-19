@@ -256,7 +256,13 @@ func spawnAt(target string, p placement, sessionID, bin string) (string, error) 
 	_ = exec.Command("tmux", "set-option", "-t", paneID, "-p", "@stack-tui", "1").Run()
 	_ = exec.Command("tmux", "set-option", "-t", paneID, "-p", "@stack-session", sessionID).Run()
 	_ = exec.Command("tmux", "set-option", "-t", paneID, "-p", "@stack-placement", p.String()).Run()
-	_ = exec.Command("tmux", "set-option", "-t", paneID, "-p", "remain-on-exit", "on").Run()
+	// remain-on-exit keeps the pane around after the TUI process dies
+	// so a crash log stays visible. Useful during development, noisy
+	// in normal use (every `q` leaves a "Pane is dead" stub). Gate on
+	// STACK_DEBUG so the default UX is the clean one.
+	if os.Getenv("STACK_DEBUG") != "" {
+		_ = exec.Command("tmux", "set-option", "-t", paneID, "-p", "remain-on-exit", "on").Run()
+	}
 	return paneID, nil
 }
 
