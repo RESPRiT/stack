@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"time"
 
 	"stack/internal/tmuxpane"
 )
@@ -56,20 +58,40 @@ func cmdHookSessionStart(args []string) error {
 	}
 	var input hookInput
 	if err := json.Unmarshal(raw, &input); err != nil {
-		return nil
-	}
-	if input.SessionID == "" {
-		return nil
-	}
-	if os.Getenv("TMUX") == "" {
+		logHookFire("parse-error", "", err.Error())
 		return nil
 	}
 
+	var n int
+	var actErr error
 	switch input.Source {
 	case "clear":
-		_, _ = tmuxpane.CloseForSession(input.SessionID)
+		if input.SessionID != "" && os.Getenv("TMUX") != "" {
+			n, actErr = tmuxpane.CloseForSession(input.SessionID)
+		}
 	case "resume":
-		_, _ = tmuxpane.RetargetForSession(input.SessionID)
+		if input.SessionID != "" && os.Getenv("TMUX") != "" {
+			n, actErr = tmuxpane.RetargetForSession(input.SessionID)
+		}
 	}
+	logHookFire(input.Source, input.SessionID, fmt.Sprintf("n=%d err=%v tmux=%q", n, actErr, os.Getenv("TMUX")))
 	return nil
+}
+
+// logHookFire appends a one-line trace to ~/.stack/hook.log so we can
+// diagnose whether SessionStart events are reaching us and with what
+// payload. Best-effort; silent on failure.
+func logHookFire(source, sessionID, extra string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	path := filepath.Join(home, ".stack", "hook.log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s source=%q session_id=%q %s\n",
+		time.Now().Format(time.RFC3339), source, sessionID, extra)
 }

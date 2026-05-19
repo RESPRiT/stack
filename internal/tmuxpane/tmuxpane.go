@@ -23,6 +23,12 @@ import (
 const (
 	topRows   = 12
 	rightCols = 32
+	// minRightWidth is the floor below which a right-placed pane is
+	// unreadable (title row collides with the ID, topics render as a
+	// single ellipsis). Rapid-resize sequences let tmux's auto-resize
+	// clamp the -l rightCols split well below rightCols; when that
+	// happens we downgrade to top placement instead.
+	minRightWidth = 16
 )
 
 // reflowWindow is the coalescing window for leading-edge + trailing
@@ -59,13 +65,27 @@ func placementFromString(s string) (placement, bool) {
 	return placementTop, false
 }
 
-func (p placement) splitArgs(target string) []string {
+func (p placement) splitArgs(target string, size int) []string {
 	switch p {
 	case placementRight:
-		return []string{"split-window", "-h", "-l", strconv.Itoa(rightCols), "-t", target, "-P", "-F", "#{pane_id}"}
+		return []string{"split-window", "-h", "-l", strconv.Itoa(size), "-t", target, "-P", "-F", "#{pane_id}"}
 	default:
-		return []string{"split-window", "-v", "-b", "-l", strconv.Itoa(topRows), "-t", target, "-P", "-F", "#{pane_id}"}
+		return []string{"split-window", "-v", "-b", "-l", strconv.Itoa(size), "-t", target, "-P", "-F", "#{pane_id}"}
 	}
+}
+
+// rightWidthFor returns the column count to request for a right-placed
+// pane given the current window width. Capped at rightCols so the
+// panel doesn't grow indefinitely on wide displays, but stepped down to
+// at most 25% of the window so it never dominates a narrow window.
+func rightWidthFor(winCols int) int {
+	if winCols <= 0 {
+		return rightCols
+	}
+	if cap := winCols / 4; cap > 0 && cap < rightCols {
+		return cap
+	}
+	return rightCols
 }
 
 // cellAspect normalizes character-cell shape to pixels. Terminal cells
@@ -74,39 +94,21 @@ func (p placement) splitArgs(target string) []string {
 // ratio into a visual aspect ratio where 1.0 means visually square.
 const cellAspect = 2.0
 
-// Hysteresis thresholds for decide(), in *visual* aspect units
-// (cols / (rows × cellAspect)). The asymmetric 0.95..1.05 band around
-// 1.0 prevents flapping when a drag-resize crosses the threshold with
-// mouse jitter: once placed at top, we don't flip to right until the
-// aspect is clearly wide; once at right, we don't flip to top until the
-// aspect is clearly tall.
-const (
-	flipToRight = 1.05
-	flipToTop   = 0.95
-)
-
-// decide returns the placement we should be in given the window's
-// dimensions and where we are now. Uses window dims (not the main
-// pane's) because the main pane's aspect depends on where the TUI sits
-// — using it would flap on every resize. Normalizes by cellAspect so
-// thresholds reflect visual perception rather than raw character grid.
-func decide(cols, rows int, current placement) placement {
+// decide returns the placement for a window with the given dimensions.
+// Uses window dims (not the main pane's) because the main pane's
+// aspect depends on where the TUI sits — using it would flap on every
+// resize. Normalizes by cellAspect so the threshold reflects visual
+// perception rather than the raw character grid: visually wide → right,
+// visually tall-or-square → top. Single threshold (no hysteresis), so
+// near-square windows snap crisply between placements on resize.
+func decide(cols, rows int) placement {
 	if rows == 0 {
-		return current
-	}
-	ratio := float64(cols) / (float64(rows) * cellAspect)
-	switch current {
-	case placementRight:
-		if ratio < flipToTop {
-			return placementTop
-		}
-		return placementRight
-	default:
-		if ratio >= flipToRight {
-			return placementRight
-		}
 		return placementTop
 	}
+	if float64(cols) >= float64(rows)*cellAspect {
+		return placementRight
+	}
+	return placementTop
 }
 
 // EnsureResizeHook installs a global client-resized tmux hook that runs
@@ -158,7 +160,7 @@ func EnsureRunning(sessionID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = spawnAt(current.id, decide(winCols, winRows, placementTop), sessionID, bin)
+	_, err = spawnAt(current.id, decide(winCols, winRows), winCols, sessionID, bin)
 	return err
 }
 
@@ -216,8 +218,17 @@ func reflowOnce() error {
 		if err != nil {
 			continue
 		}
-		desired := decide(winCols, winRows, currentPlacement(tui))
-		if currentPlacement(tui) == desired {
+		cur := currentPlacement(tui)
+		desired := decide(winCols, winRows)
+		// If a right pane got clamped below the readability floor —
+		// typically a rapid-resize sequence where tmux auto-shrunk the
+		// pane and the previous reflow tick skipped because
+		// placement=desired — force a respawn and downgrade to top.
+		// Re-spawning Right would just hit the same clamp.
+		if cur == placementRight && tui.cols > 0 && tui.cols < minRightWidth {
+			desired = placementTop
+		}
+		if cur == desired {
 			continue
 		}
 		if tui.sessionID == "" {
@@ -230,7 +241,7 @@ func reflowOnce() error {
 			continue
 		}
 		_ = exec.Command("tmux", "kill-pane", "-t", tui.id).Run()
-		if _, err := spawnAt(main.id, desired, tui.sessionID, bin); err != nil {
+		if _, err := spawnAt(main.id, desired, winCols, tui.sessionID, bin); err != nil {
 			return err
 		}
 	}
@@ -239,9 +250,34 @@ func reflowOnce() error {
 
 // spawnAt splits target with the given placement, runs `stack tui`
 // pinned to sessionID, and stamps the new pane with the user options we
-// rely on for detection and recovery.
-func spawnAt(target string, p placement, sessionID, bin string) (string, error) {
-	args := p.splitArgs(target)
+// rely on for detection and recovery. winCols sizes a right placement
+// against the 25 % cap (see rightWidthFor); pass 0 to fall back to
+// rightCols. A right pane that tmux clamps below minRightWidth
+// (rapid-resize squash) is killed and retried as top.
+func spawnAt(target string, p placement, winCols int, sessionID, bin string) (string, error) {
+	paneID, err := splitWindow(target, p, winCols, sessionID, bin)
+	if err != nil {
+		return "", err
+	}
+	if p == placementRight {
+		if w := paneWidth(paneID); w > 0 && w < minRightWidth {
+			_ = exec.Command("tmux", "kill-pane", "-t", paneID).Run()
+			return splitWindow(target, placementTop, winCols, sessionID, bin)
+		}
+	}
+	return paneID, nil
+}
+
+// splitWindow runs tmux split-window for the given placement and
+// stamps the new pane with @stack-* options. Factored out so spawnAt
+// can call it twice on the right→top downgrade path without
+// duplicating the stamping.
+func splitWindow(target string, p placement, winCols int, sessionID, bin string) (string, error) {
+	size := topRows
+	if p == placementRight {
+		size = rightWidthFor(winCols)
+	}
+	args := p.splitArgs(target, size)
 	cmdLine := fmt.Sprintf("CLAUDE_CODE_SESSION_ID=%s exec %s tui", shellQuote(sessionID), shellQuote(bin))
 	args = append(args, cmdLine)
 
@@ -264,6 +300,17 @@ func spawnAt(target string, p placement, sessionID, bin string) (string, error) 
 		_ = exec.Command("tmux", "set-option", "-t", paneID, "-p", "remain-on-exit", "on").Run()
 	}
 	return paneID, nil
+}
+
+// paneWidth returns the column count of the given pane, or 0 if the
+// query fails. Used post-spawn to detect tmux clamping.
+func paneWidth(paneID string) int {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{pane_width}").Output()
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return n
 }
 
 type paneInfo struct {
@@ -388,8 +435,8 @@ func RetargetForSession(newSessionID string) (int, error) {
 		if werr != nil {
 			continue
 		}
-		p := decide(winCols, winRows, placementTop)
-		if _, err := spawnAt(main.id, p, newSessionID, bin); err != nil {
+		p := decide(winCols, winRows)
+		if _, err := spawnAt(main.id, p, winCols, newSessionID, bin); err != nil {
 			continue
 		}
 		retargeted++
