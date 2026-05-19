@@ -20,6 +20,7 @@ When you finish a sub-task that sits on top of the stack, pop it without waiting
 Pop when:
 
 - The sub-task that defines the current top is *complete* — committed, validated, or explicitly handed off.
+- The item is being explicitly tabled for later.
 
 Don't pop just because:
 
