@@ -60,7 +60,54 @@ const (
 	scrollVertical
 )
 
+// cmdTUI dispatches the TUI command family. Subcommands manage the
+// @stack-tui pane lifecycle:
+//
+//   - `stack tui open`    spawn the pane (no-op if one already exists).
+//   - `stack tui close`   dismiss any pane in the current tmux session.
+//   - `stack tui reflow`  reposition the pane for the current terminal size.
+//
+// `stack tui` (no sub) auto-detects: if invoked inside an @stack-tui
+// pane (or outside tmux entirely), it runs the foreground Bubble Tea
+// process; otherwise it falls through to `tui open` and spawns the
+// pane. tmux's split-window invokes `<bin> tui` for the spawned pane,
+// so the auto-detect lands on the foreground path inside the pane.
 func cmdTUI(args []string) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "open":
+			return cmdOpen(args[1:])
+		case "close":
+			return cmdClose(args[1:])
+		case "reflow":
+			return cmdReflow(args[1:])
+		}
+	}
+	// No sub (or an unrecognized first arg that's actually a flag like
+	// `--session=foo`). Auto-detect whether to run the foreground TUI
+	// or spawn the pane.
+	if shouldRunForegroundTUI() {
+		return runForegroundTUI(args)
+	}
+	return cmdOpen(args)
+}
+
+// shouldRunForegroundTUI is true when `stack tui` should take over the
+// current terminal with the Bubble Tea program rather than spawning a
+// tmux pane: outside tmux entirely, or inside an existing @stack-tui
+// pane (the case during tmux's split-window invocation).
+func shouldRunForegroundTUI() bool {
+	if os.Getenv("TMUX") == "" {
+		return true
+	}
+	paneID := os.Getenv("TMUX_PANE")
+	if paneID == "" {
+		return true
+	}
+	return tmuxpane.IsTUIPane(paneID)
+}
+
+func runForegroundTUI(args []string) error {
 	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
 	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")
 	if err := fs.Parse(args); err != nil {

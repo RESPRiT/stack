@@ -119,11 +119,12 @@ func decide(cols, rows int) placement {
 	return placementTop
 }
 
-// EnsureResizeHook installs a global client-resized tmux hook that runs
-// `stack reflow` when the terminal size changes, if no such hook is
-// already present. Safe to call repeatedly: detection is by substring
-// match for "<bin> reflow" in the hook list, so we won't double-install.
-// Outside tmux this is a no-op.
+// EnsureResizeHook installs a global client-resized tmux hook that
+// runs `stack tui reflow` when the terminal size changes, if no such
+// hook is already present. Safe to call repeatedly: detection is by
+// substring match for "<bin> tui reflow" in the hook list, so we
+// won't double-install. Also unsets any legacy `<bin> reflow` hooks
+// left over from a previous version. Outside tmux this is a no-op.
 func EnsureResizeHook() error {
 	if !inTmux() {
 		return nil
@@ -132,18 +133,47 @@ func EnsureResizeHook() error {
 	if err != nil {
 		return err
 	}
-	marker := bin + " reflow"
+	marker := bin + " tui reflow"
+	legacyMarker := bin + " reflow"
+
 	out, err := exec.Command("tmux", "show-hooks", "-g").Output()
 	if err != nil {
 		return fmt.Errorf("show-hooks: %w", err)
 	}
+	already := false
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.Contains(line, "client-resized") && strings.Contains(line, marker) {
-			return nil
+		if !strings.Contains(line, "client-resized") {
+			continue
 		}
+		if strings.Contains(line, marker) {
+			already = true
+			continue
+		}
+		// Detect legacy "<bin> reflow" hooks (without " tui "
+		// in the path) and unset them so we don't fire a stale
+		// subcommand on every resize.
+		if strings.Contains(line, legacyMarker) && !strings.Contains(line, marker) {
+			if idx := parseHookIndex(line); idx != "" {
+				_ = exec.Command("tmux", "set-hook", "-gu", "client-resized"+idx).Run()
+			}
+		}
+	}
+	if already {
+		return nil
 	}
 	hookCmd := "run-shell " + shellQuote(marker)
 	return exec.Command("tmux", "set-hook", "-ga", "client-resized", hookCmd).Run()
+}
+
+// parseHookIndex returns the "[N]" suffix from a `tmux show-hooks`
+// line (e.g. "client-resized[0] run-shell ..."), or "" if absent.
+func parseHookIndex(line string) string {
+	i := strings.Index(line, "[")
+	j := strings.Index(line, "]")
+	if i < 0 || j < 0 || j < i {
+		return ""
+	}
+	return line[i : j+1]
 }
 
 // EnsureRunning spawns a TUI pane for sessionID if and only if:
@@ -359,6 +389,17 @@ func inTmux() bool {
 // outside this package that want to ask "is there already a TUI pane
 // in the current window?" without spawning one.
 func TUIPaneExists() (bool, error) { return tuiPaneExists() }
+
+// IsTUIPane reports whether the given pane has @stack-tui set. Used
+// by `stack tui`'s auto-detect: when invoked inside a marked pane it
+// runs the foreground Bubble Tea process; outside, it spawns the pane.
+func IsTUIPane(paneID string) bool {
+	out, err := exec.Command("tmux", "show-option", "-t", paneID, "-p", "-v", "@stack-tui").Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "1"
+}
 
 // TUIPaneInfo is the exported view of a discovered @stack-tui pane.
 type TUIPaneInfo struct {

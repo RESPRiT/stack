@@ -8,7 +8,7 @@ import (
 // Version is the user-visible release marker. Shown in the TUI header
 // and by `stack --version`. Bumped manually per release; pre-1.0 while
 // the surface is still iterating.
-const Version = "0.1.24"
+const Version = "0.1.25"
 
 const usage = `stack — a topic stack for coding-agent sessions.
 
@@ -23,10 +23,11 @@ Usage:
   stack context <pos> <text>...    set the context inline (positional args joined with spaces)
   stack context <pos> -            read the context from stdin
   stack context <pos> --clear      remove the context (item reverts to a bare string on disk)
-  stack tui                live TUI view of the stack
-  stack open               spawn the TUI pane (inside tmux), idempotent
-  stack close              dismiss any open TUI pane(s) for this session
-  stack reflow             reposition the TUI pane for the current terminal size
+  stack tui                live TUI view; inside an @stack-tui pane runs the foreground
+                           process, outside it auto-spawns one (= stack tui open)
+  stack tui open           spawn the @stack-tui pane (idempotent — no-op if one exists)
+  stack tui close          dismiss any open TUI pane(s) for this session
+  stack tui reflow         reposition the TUI pane for the current terminal size
   stack hmr [on|off|status]   toggle hot-reload of the TUI on .go changes (no arg = toggle)
   stack version            print the version
   stack help               show this help
@@ -60,12 +61,6 @@ func main() {
 		err = cmdEdit(args)
 	case "tui":
 		err = cmdTUI(args)
-	case "open":
-		err = cmdOpen(args)
-	case "close":
-		err = cmdClose(args)
-	case "reflow":
-		err = cmdReflow(args)
 	case "hmr":
 		err = cmdHMR(args)
 	case "hook":

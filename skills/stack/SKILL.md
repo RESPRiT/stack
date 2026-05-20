@@ -7,12 +7,12 @@ argument-hint: "[open|close]"
 If `$ARGUMENTS` is empty, treat it as `open`. Otherwise pass it through verbatim. Then run the resolved command via the Bash tool and relay its stdout verbatim to the user.
 
 ```
-stack <resolved-argument>
+stack tui $ARGUMENTS
 ```
 
 CLI behavior:
 
-- `stack open` — if no TUI pane exists for this tmux session, spawn one (split direction is decided automatically from the window's aspect ratio). If one already exists, prints `TUI pane already open` and exits 0.
-- `stack close` — kills every `@stack-tui` pane in the current tmux session.
+- `stack tui open` — if no TUI pane exists for this tmux session, spawn one (split direction is decided automatically from the window's aspect ratio). If one already exists, prints `TUI pane already open` and exits 0.
+- `stack tui close` — kills every `@stack-tui` pane in the current tmux session.
 
-Outside tmux, `open` prints a hint that you need a tmux session and exits 0. The stack itself is unaffected by either subcommand — they only manage the visual pane.
+Outside tmux, `stack tui open` prints a hint that you need a tmux session and exits 0. The stack itself is unaffected by either subcommand — they only manage the visual pane.
