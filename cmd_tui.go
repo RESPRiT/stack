@@ -34,6 +34,11 @@ const (
 	scrollStable = 10 * time.Second
 	// scrollCharsPerSec controls horizontal-mode glide rate.
 	scrollCharsPerSec = 8
+	// scrollEndPad is the rune-width of breathing room appended past an
+	// over-width topic for the horizontal-scroll cycle. Two of those slots
+	// land as visible trailing spaces before the right edge; the third
+	// compensates for the head "…" that consumes one rendered slot.
+	scrollEndPad = 3
 	// scrollHoldEnd is the pause after horizontal scrolling reaches the
 	// end before the cycle resets to offset 0.
 	scrollHoldEnd = 10 * time.Second
@@ -281,7 +286,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// option). Auto-manages the daemon lifecycle: starts it
 			// when this is the first opt-in, stops it when this was
 			// the last opt-out.
-			go togglePaneHMR()
+			go togglePaneHMR(m.sessionID)
 			return m, waitForEvent(m.events)
 		}
 	case tea.WindowSizeMsg:
@@ -305,12 +310,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // togglePaneHMR is the body of the 'h' keypress: flips this pane's
 // @stack-hmr opt-in and adjusts the daemon to match.
 //
-//   - opting in (0→1): start the daemon if not already running.
+//   - opting in (0→1): start the daemon if not already running, then
+//     respawn this pane so it picks up the current on-disk binary
+//     immediately instead of waiting for the next .go save.
 //   - opting out (1→0): stop the daemon if no other pane is opted in.
 //
 // Lifecycle is "start on first opt-in, stop on last opt-out" so the
 // user never has to think about the daemon separately.
-func togglePaneHMR() {
+func togglePaneHMR(sessionID string) {
 	paneID := os.Getenv("TMUX_PANE")
 	if paneID == "" {
 		return
@@ -328,6 +335,8 @@ func togglePaneHMR() {
 		if !hmrRunningSilent() {
 			_ = exec.Command(bin, "hmr", "on").Run()
 		}
+		cmdLine := fmt.Sprintf("CLAUDE_CODE_SESSION_ID=%s exec %q tui", sessionID, bin)
+		_ = exec.Command("tmux", "respawn-pane", "-k", "-t", paneID, cmdLine).Run()
 		return
 	}
 	// Just opted out. Stop the daemon if no one else is using it.
@@ -467,7 +476,10 @@ func (m *model) maxScrollOffset() int {
 	max := 0
 	for _, t := range m.topics {
 		l := len([]rune(t.Topic))
-		if d := l - w; d > max {
+		if l <= w {
+			continue
+		}
+		if d := l + scrollEndPad - w; d > max {
 			max = d
 		}
 	}
@@ -499,7 +511,7 @@ func (m model) horizontalOffset(topicIdx, topicRunes int) int {
 	}
 	phaseElapsed := elapsed - scrollStable
 	for _, idx := range m.overlongTopicIndices() {
-		runes := len([]rune(m.topics[idx].Topic))
+		runes := len([]rune(m.topics[idx].Topic)) + scrollEndPad
 		topicMaxOff := runes - w
 		if topicMaxOff <= 0 {
 			continue
@@ -557,7 +569,7 @@ func (m model) horizontalCycleEnd() time.Duration {
 			continue
 		}
 		any = true
-		maxOff := runes - w
+		maxOff := runes + scrollEndPad - w
 		scrollDur := time.Duration(maxOff) * time.Second / scrollCharsPerSec
 		total += scrollDur + scrollHoldEnd
 	}
@@ -773,6 +785,11 @@ func (m model) View() string {
 
 		for i := topI; i >= botI; i-- {
 			runes := []rune(m.topics[i].Topic)
+			// Over-width topics get trailing-space breathing room so the
+			// scroll lands a couple of columns shy of the right edge.
+			if len(runes) > renderW {
+				runes = append(runes, []rune(strings.Repeat(" ", scrollEndPad))...)
+			}
 			off := 0
 			if mode == scrollHorizontal {
 				off = m.horizontalOffset(i, len(runes))

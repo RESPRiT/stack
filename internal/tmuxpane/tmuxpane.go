@@ -22,7 +22,7 @@ import (
 // without crowding the agent's main pane.
 const (
 	topRows   = 12
-	rightCols = 32
+	rightCols = 64
 	// minRightWidth is the floor below which a right-placed pane is
 	// unreadable (title row collides with the ID, topics render as a
 	// single ellipsis). Sets the lower bound rightWidthFor can return.

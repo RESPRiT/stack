@@ -41,7 +41,7 @@ func TestRightWidthFor(t *testing.T) {
 		want    int
 	}{
 		// At or above 4 × rightCols, the cap matches rightCols.
-		{"wide window stays at rightCols", 200, rightCols},
+		{"wide window stays at rightCols", rightCols*4 + 100, rightCols},
 		{"exactly 4×rightCols stays at rightCols", rightCols * 4, rightCols},
 		// Below 4 × rightCols, the cap kicks in: width = winCols / 4.
 		{"100 cols clamps to 25", 100, 25},
