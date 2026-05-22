@@ -34,8 +34,8 @@ func cmdPop(args []string) error {
 		return err
 	}
 	fmt.Printf("popped from %s (depth %d): %s\n", id, len(s.Topics), popped.Topic)
-	if popped.Context != "" {
-		fmt.Printf("  context: %s\n", popped.Context)
+	if popped.Ref != "" {
+		fmt.Printf("  ref: %s\n", popped.Ref)
 	}
 	return nil
 }

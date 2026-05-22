@@ -29,24 +29,24 @@ Constraints:
 - **Only push what justifies a line in the TUI.** Trivial tool calls (a single grep, one quick read, a short clarifying question) don't merit a push. Multi-step or multi-turn work does.
 - **Don't auto-push on every user message.** Push when you're starting work, not when the user is just talking.
 
-## Attaching context to a pushed item
+## Attaching a ref to a pushed item
 
-A pushed topic is just a short label. When the *why* — a blocker, a link, a resume condition, the active mental model — would help on the next encounter, attach it as context after the push:
+A pushed topic is just a short label. When the *why* — a blocker, a link, a resume condition, the active mental model — would help on the next encounter, attach it as a ref after the push:
 
 ```
-stack context top "waiting on review of PR #123"
+stack ref top "waiting on review of PR #123"
 ```
 
 Pipe in longer notes (multi-line OK) with the `-` form:
 
 ```
-echo "...notes..." | stack context top -
+echo "...notes..." | stack ref top -
 ```
 
-When to attach context (don't reflexively; the topic alone is usually enough):
+When to attach a ref (don't reflexively; the topic alone is usually enough):
 
 - **Tabling for later.** If you're popping or moving on without finishing, capture the resume condition so the next visit doesn't start from a blank slate.
-- **The reason isn't obvious from the topic.** If the topic line reads fine on its own ("Fix login bug"), no context needed. If it points at a non-obvious blocker, link, or rationale, attach it.
+- **The reason isn't obvious from the topic.** If the topic line reads fine on its own ("Fix login bug"), no ref needed. If it points at a non-obvious blocker, link, or rationale, attach it.
 - **Handoff state.** When you've reached a sub-decision or were reading specific files, jot the file paths and the conclusion so a future turn can resume mid-thought.
 
-Keep contexts tight — they exceed 1 KB only by accident; the panel shows them inline. Update or `--clear` them as the situation changes.
+Keep refs tight — they exceed 1 KB only by accident; the panel shows them inline. Update or `--clear` them as the situation changes.

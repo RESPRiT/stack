@@ -5,9 +5,9 @@
 // human (or a coding agent) can inspect and edit it directly.
 //
 // Each entry in `topics` is either a bare string (just the topic, no
-// context) or a `{"topic": "...", "context": "..."}` object. Context-
-// less items stay as bare strings on save so hand-editing remains easy
-// for the common case.
+// ref) or a `{"topic": "...", "ref": "..."}` object. Ref-less items
+// stay as bare strings on save so hand-editing remains easy for the
+// common case.
 package store
 
 import (
@@ -20,35 +20,35 @@ import (
 	"time"
 )
 
-// MaxContextBytes is the soft size cap for a single Item's Context.
-// Saves above this size still proceed; a warning is written to
-// os.Stderr so the user notices the bloat.
-const MaxContextBytes = 1024
+// MaxRefBytes is the soft size cap for a single Item's Ref. Saves
+// above this size still proceed; a warning is written to os.Stderr so
+// the user notices the bloat.
+const MaxRefBytes = 1024
 
 // Item is one entry on the stack: the topic text plus an optional
-// free-form context the user (or agent) attaches for future reference.
-// An Item with empty Context marshals as a bare JSON string so the
-// stack file stays hand-editable for the common case.
+// free-form ref the user (or agent) attaches for future reference. An
+// Item with empty Ref marshals as a bare JSON string so the stack
+// file stays hand-editable for the common case.
 type Item struct {
-	Topic   string
-	Context string
+	Topic string
+	Ref   string
 }
 
-// MarshalJSON emits a bare string when no context is set, or a
-// {"topic", "context"} object when one is. The asymmetric shape keeps
-// short, context-less stacks readable on disk.
+// MarshalJSON emits a bare string when no ref is set, or a
+// {"topic", "ref"} object when one is. The asymmetric shape keeps
+// short, ref-less stacks readable on disk.
 func (i Item) MarshalJSON() ([]byte, error) {
-	if i.Context == "" {
+	if i.Ref == "" {
 		return json.Marshal(i.Topic)
 	}
 	return json.Marshal(struct {
-		Topic   string `json:"topic"`
-		Context string `json:"context"`
-	}{i.Topic, i.Context})
+		Topic string `json:"topic"`
+		Ref   string `json:"ref"`
+	}{i.Topic, i.Ref})
 }
 
-// UnmarshalJSON accepts either a bare string (legacy / context-less)
-// or an object with topic + context. Anything else is a parse error.
+// UnmarshalJSON accepts either a bare string (legacy / ref-less) or
+// an object with topic + ref. Anything else is a parse error.
 func (i *Item) UnmarshalJSON(data []byte) error {
 	data = bytes.TrimSpace(data)
 	if len(data) > 0 && data[0] == '"' {
@@ -57,18 +57,18 @@ func (i *Item) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		i.Topic = s
-		i.Context = ""
+		i.Ref = ""
 		return nil
 	}
 	var obj struct {
-		Topic   string `json:"topic"`
-		Context string `json:"context"`
+		Topic string `json:"topic"`
+		Ref   string `json:"ref"`
 	}
 	if err := json.Unmarshal(data, &obj); err != nil {
-		return fmt.Errorf("stack item: expected string or {topic, context} object: %w", err)
+		return fmt.Errorf("stack item: expected string or {topic, ref} object: %w", err)
 	}
 	i.Topic = obj.Topic
-	i.Context = obj.Context
+	i.Ref = obj.Ref
 	return nil
 }
 
@@ -107,17 +107,17 @@ func Load(sessionDir string) (Stack, error) {
 // POSIX and guarantees a TUI fsnotify watcher sees exactly one
 // Write/Create event per save instead of a half-written file.
 //
-// Any Item.Context above MaxContextBytes emits a single-line warning
-// to os.Stderr — the save still proceeds (advisory cap, not enforced).
+// Any Item.Ref above MaxRefBytes emits a single-line warning to
+// os.Stderr — the save still proceeds (advisory cap, not enforced).
 func save(sessionDir string, s Stack) error {
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", sessionDir, err)
 	}
 	s.UpdatedAt = time.Now().UTC()
 	for _, it := range s.Topics {
-		if n := len(it.Context); n > MaxContextBytes {
-			fmt.Fprintf(os.Stderr, "stack: warning: context for %q is %d bytes (cap %d)\n",
-				it.Topic, n, MaxContextBytes)
+		if n := len(it.Ref); n > MaxRefBytes {
+			fmt.Fprintf(os.Stderr, "stack: warning: ref for %q is %d bytes (cap %d)\n",
+				it.Topic, n, MaxRefBytes)
 		}
 	}
 	b, err := json.MarshalIndent(s, "", "  ")
@@ -187,7 +187,7 @@ func posToArrayIndex(pos, n int) (int, error) {
 }
 
 // Rename replaces the topic at user-facing position pos with newText.
-// The context (if any) is preserved. pos is 1-based top-first.
+// The ref (if any) is preserved. pos is 1-based top-first.
 func Rename(sessionDir string, pos int, newText string) (Stack, error) {
 	s, err := Load(sessionDir)
 	if err != nil {
@@ -208,7 +208,7 @@ func Rename(sessionDir string, pos int, newText string) (Stack, error) {
 }
 
 // Move re-orders the topic at position from to position to. Both are
-// 1-based top-first. A no-op (from == to) succeeds silently. Context
+// 1-based top-first. A no-op (from == to) succeeds silently. Ref
 // travels with the item.
 func Move(sessionDir string, from, to int) (Stack, error) {
 	s, err := Load(sessionDir)
@@ -243,10 +243,10 @@ func Move(sessionDir string, from, to int) (Stack, error) {
 	return s, nil
 }
 
-// SetContext sets the context for the item at user-facing 1-based
-// top-first position pos. An empty string clears the context (the item
-// reverts to a bare string on disk).
-func SetContext(sessionDir string, pos int, context string) (Stack, error) {
+// SetRef sets the ref for the item at user-facing 1-based top-first
+// position pos. An empty string clears the ref (the item reverts to a
+// bare string on disk).
+func SetRef(sessionDir string, pos int, ref string) (Stack, error) {
 	s, err := Load(sessionDir)
 	if err != nil {
 		return Stack{}, err
@@ -258,7 +258,7 @@ func SetContext(sessionDir string, pos int, context string) (Stack, error) {
 	if err != nil {
 		return s, err
 	}
-	s.Topics[idx].Context = context
+	s.Topics[idx].Ref = ref
 	if err := save(sessionDir, s); err != nil {
 		return Stack{}, err
 	}

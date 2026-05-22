@@ -7,7 +7,7 @@ import (
 )
 
 func TestItemJSON_BareString(t *testing.T) {
-	// Context-less item round-trips as a bare JSON string.
+	// Ref-less item round-trips as a bare JSON string.
 	in := Item{Topic: "fix the bug"}
 	b, err := json.Marshal(in)
 	if err != nil {
@@ -25,14 +25,14 @@ func TestItemJSON_BareString(t *testing.T) {
 	}
 }
 
-func TestItemJSON_WithContext(t *testing.T) {
-	// Item with context round-trips as an object.
-	in := Item{Topic: "ship feature", Context: "waiting on PR #123"}
+func TestItemJSON_WithRef(t *testing.T) {
+	// Item with ref round-trips as an object.
+	in := Item{Topic: "ship feature", Ref: "_TODO/ship-feature.md"}
 	b, err := json.Marshal(in)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	want := `{"topic":"ship feature","context":"waiting on PR #123"}`
+	want := `{"topic":"ship feature","ref":"_TODO/ship-feature.md"}`
 	if got := string(b); got != want {
 		t.Errorf("marshal: got %s, want %s", got, want)
 	}
@@ -51,7 +51,7 @@ func TestItemJSON_MixedArray(t *testing.T) {
 	raw := `{
   "topics": [
     "topic A",
-    {"topic": "topic B", "context": "with ctx"},
+    {"topic": "topic B", "ref": "with ref"},
     "topic C"
   ],
   "updated_at": "2026-05-19T22:00:00Z"
@@ -66,7 +66,7 @@ func TestItemJSON_MixedArray(t *testing.T) {
 	if s.Topics[0] != (Item{Topic: "topic A"}) {
 		t.Errorf("topics[0]: got %+v", s.Topics[0])
 	}
-	if s.Topics[1] != (Item{Topic: "topic B", Context: "with ctx"}) {
+	if s.Topics[1] != (Item{Topic: "topic B", Ref: "with ref"}) {
 		t.Errorf("topics[1]: got %+v", s.Topics[1])
 	}
 	if s.Topics[2] != (Item{Topic: "topic C"}) {
@@ -81,7 +81,7 @@ func TestItemJSON_MixedArray(t *testing.T) {
 	if !strings.Contains(str, `"topic A"`) || !strings.Contains(str, `"topic C"`) {
 		t.Errorf("expected bare strings preserved: %s", str)
 	}
-	if !strings.Contains(str, `"topic":"topic B"`) || !strings.Contains(str, `"context":"with ctx"`) {
+	if !strings.Contains(str, `"topic":"topic B"`) || !strings.Contains(str, `"ref":"with ref"`) {
 		t.Errorf("expected object preserved: %s", str)
 	}
 }

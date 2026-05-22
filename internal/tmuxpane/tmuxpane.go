@@ -366,7 +366,6 @@ func spawnAt(target string, p placement, winCols int, sessionID, bin string) (st
 	return paneID, nil
 }
 
-
 type paneInfo struct {
 	id         string
 	windowID   string

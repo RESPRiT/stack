@@ -43,4 +43,3 @@ func cmdOpen(args []string) error {
 	fmt.Printf("opened TUI pane for %s\n", id)
 	return nil
 }
-

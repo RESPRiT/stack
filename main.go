@@ -16,13 +16,13 @@ Usage:
   stack                    alias for stack ls (default action)
   stack push <topic>...    push a topic onto the current session's stack
   stack pop                pop the top topic
-  stack ls [-v]            list the stack, top first; -v also prints each topic's context
+  stack ls [-v]            list the stack, top first; -v also prints each topic's ref
   stack edit rename <pos> <text>   rename the topic at position (1-based top-first, or top|bottom)
   stack edit move <from> <to>      reorder a topic; positions as above
-  stack context <pos>              print the context attached to the topic at <pos>
-  stack context <pos> <text>...    set the context inline (positional args joined with spaces)
-  stack context <pos> -            read the context from stdin
-  stack context <pos> --clear      remove the context (item reverts to a bare string on disk)
+  stack ref <pos>                  print the ref attached to the topic at <pos>
+  stack ref <pos> <text>...        set the ref inline (positional args joined with spaces)
+  stack ref <pos> -                read the ref from stdin
+  stack ref <pos> --clear          remove the ref (item reverts to a bare string on disk)
   stack tui                live TUI view; inside an @stack-tui pane runs the foreground
                            process, outside it auto-spawns one (= stack tui open)
   stack tui open           spawn the @stack-tui pane (idempotent — no-op if one exists)
@@ -65,8 +65,8 @@ func main() {
 		err = cmdHMR(args)
 	case "hook":
 		err = cmdHook(args)
-	case "context":
-		err = cmdContext(args)
+	case "ref":
+		err = cmdRef(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	case "version", "--version", "-v":

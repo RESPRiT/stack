@@ -197,18 +197,18 @@ func startWatcher(dir string, ch chan<- tea.Msg) (*fsnotify.Watcher, error) {
 }
 
 type model struct {
-	sessionID    string
-	sessionDir   string
-	topics       []store.Item
-	updatedAt    time.Time
-	width        int
-	height       int
-	err          error
+	sessionID      string
+	sessionDir     string
+	topics         []store.Item
+	updatedAt      time.Time
+	width          int
+	height         int
+	err            error
 	events         chan tea.Msg
 	scrollAnchor   time.Time  // start of the current scroll cycle
 	lastScrollMode scrollMode // last observed mode; mode changes reset the anchor
 	hmrOn          bool       // refreshed from ~/.stack/hmr.pid on each tick
-	contextView    bool       // true while the `c` keybind is showing the top item's context
+	refView        bool       // true while the `c` keybind is showing the top item's ref
 }
 
 type reloadMsg struct{}
@@ -250,20 +250,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":
-			// Esc backs out of context view first; only quits when
-			// context view is already off.
-			if m.contextView {
-				m.contextView = false
+			// Esc backs out of ref view first; only quits when
+			// ref view is already off.
+			if m.refView {
+				m.refView = false
 				return m, waitForEvent(m.events)
 			}
 			return m, tea.Quit
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "c":
-			// Toggle the per-pane context view (shows the top item's
-			// context if it has one). No-op when there's no top item.
+			// Toggle the per-pane ref view (shows the top item's ref
+			// if it has one). No-op when there's no top item.
 			if len(m.topics) > 0 {
-				m.contextView = !m.contextView
+				m.refView = !m.refView
 			}
 			return m, waitForEvent(m.events)
 		case "r":
@@ -750,18 +750,18 @@ func (m model) View() string {
 		// before the footer falls out naturally; the empty branch has
 		// to add one explicitly to keep that blank in the layout.
 		b.WriteString("\n")
-	} else if m.contextView {
-		// Context view: replace the topics list with the top item's
-		// context. Long contexts wrap to the pane width; truncation is
+	} else if m.refView {
+		// Ref view: replace the topics list with the top item's
+		// ref. Long refs wrap to the pane width; truncation is
 		// the caller's problem to scroll back to (the panel is meant
-		// for a glance, not a reader). An empty context renders a
+		// for a glance, not a reader). An empty ref renders a
 		// dim placeholder so the user understands why nothing's there.
 		top := m.topics[len(m.topics)-1]
-		header := topStyle.Render("▶ "+top.Topic) + subtleStyle.Render("  · context")
+		header := topStyle.Render("▶ "+top.Topic) + subtleStyle.Render("  · ref")
 		b.WriteString(header + "\n")
-		body := top.Context
+		body := top.Ref
 		if body == "" {
-			b.WriteString(subtleStyle.Render("(no context attached — set with `stack context top <text>`)"))
+			b.WriteString(subtleStyle.Render("(no ref attached — set with `stack ref top <text>`)"))
 			b.WriteString("\n")
 		} else {
 			for _, line := range strings.Split(body, "\n") {
@@ -796,7 +796,7 @@ func (m model) View() string {
 			}
 			visible := renderTopicRunes(runes, off, renderW)
 			ctxMark := ""
-			if m.topics[i].Context != "" {
+			if m.topics[i].Ref != "" {
 				ctxMark = subtleStyle.Render(" ·")
 			}
 			if i == len(m.topics)-1 {
@@ -810,10 +810,10 @@ func (m model) View() string {
 
 	b.WriteString("\n")
 	b.WriteString(subtleStyle.Render("r reload · "))
-	if m.contextView {
-		b.WriteString(topStyle.Render("c context"))
+	if m.refView {
+		b.WriteString(topStyle.Render("c ref"))
 	} else {
-		b.WriteString(subtleStyle.Render("c context"))
+		b.WriteString(subtleStyle.Render("c ref"))
 	}
 	b.WriteString(subtleStyle.Render(" · h "))
 	if m.hmrOn {
