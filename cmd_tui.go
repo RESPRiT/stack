@@ -487,12 +487,17 @@ func (m *model) maxScrollOffset() int {
 }
 
 // topicRenderWidth is the column budget for the topic text itself,
-// after the 2-column "▶ " (or "  ") prefix.
+// after the 2-column "▶ " (or "  ") prefix AND a 2-column reservation
+// for the optional " ·" ctxMark suffix. Reserving the ctxMark slot
+// unconditionally (even when the topic has no Ref attached) costs a
+// few columns of display but means a topic line can never exceed pane
+// width — which would otherwise wrap into the row below and leave
+// residue Bubble Tea's diff treats as "unchanged blank".
 func (m model) topicRenderWidth() int {
-	if m.width <= 2 {
+	if m.width <= 4 {
 		return 0
 	}
-	return m.width - 2
+	return m.width - 4
 }
 
 // horizontalOffset returns the rune offset for the topic at topicIdx
@@ -702,6 +707,68 @@ func renderTopicRunes(runes []rune, off, width int) string {
 	return "…" + sliceRunes(runes, off, width-1)
 }
 
+// clipToWidth returns line truncated to at most maxCols visible columns,
+// preserving ANSI escape sequences (which add no visual width) so any
+// active style on the kept prefix is honored. Used as a defense-in-depth
+// guard in View(): even if some construction site builds a row longer
+// than the pane, the terminal still gets exactly pane-width content per
+// row — no wraps, no Bubble-Tea-diff blind spots.
+//
+// Width is counted by rune; non-ASCII wide chars (CJK) may render off
+// by one but topics in this codebase are expected to be ASCII-ish.
+func clipToWidth(line string, maxCols int) string {
+	if maxCols <= 0 {
+		return ""
+	}
+	const (
+		stText = iota
+		stEsc  // just saw ESC, next byte is the introducer (e.g. '[')
+		stCSI  // inside a CSI sequence, scanning for the final byte
+	)
+	var b strings.Builder
+	visible := 0
+	truncated := false
+	state := stText
+loop:
+	for _, r := range line {
+		switch state {
+		case stText:
+			if r == 0x1b {
+				state = stEsc
+				b.WriteRune(r)
+				continue
+			}
+			if visible >= maxCols {
+				truncated = true
+				break loop
+			}
+			b.WriteRune(r)
+			visible++
+		case stEsc:
+			b.WriteRune(r)
+			if r == '[' {
+				state = stCSI
+			} else {
+				// Non-CSI ESC sequences (2-byte or otherwise) end here.
+				state = stText
+			}
+		case stCSI:
+			b.WriteRune(r)
+			// CSI parameter / intermediate bytes are 0x20–0x3F; the
+			// final byte sits in 0x40–0x7E.
+			if r >= '@' && r <= '~' {
+				state = stText
+			}
+		}
+	}
+	if truncated {
+		// Reset any active style so terminal state doesn't bleed past
+		// the clipped row.
+		b.WriteString("\x1b[0m")
+	}
+	return b.String()
+}
+
 // renderID shows a session id as 3 bright chars + 5 dim chars when the
 // id is long enough (e.g. a UUID); shorter ids (user-supplied like
 // "demo", or the "(waiting)" placeholder) render as-is.
@@ -822,5 +889,18 @@ func (m model) View() string {
 		b.WriteString(subtleStyle.Render("hmr off"))
 	}
 	b.WriteString(subtleStyle.Render(" · q quit"))
-	return b.String()
+
+	// Final guard: clip every emitted row to pane width. The topic-line
+	// construction above already reserves the ctxMark slot, but the
+	// title and footer rows have variable width and a narrow pane could
+	// still overflow them.
+	raw := b.String()
+	if m.width <= 0 {
+		return raw
+	}
+	lines := strings.Split(raw, "\n")
+	for i, line := range lines {
+		lines[i] = clipToWidth(line, m.width)
+	}
+	return strings.Join(lines, "\n")
 }
