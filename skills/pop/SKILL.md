@@ -9,7 +9,7 @@ Run the following command via the Bash tool, then relay its stdout verbatim to t
 stack pop
 ```
 
-The topic you just popped is no longer the active focus. If the stack still has items, the new top is what you should return to. If empty, ask the user what's next.
+The topic you just popped is no longer the active focus. If the stack still has items, the output's `next:` line names the new top — that's what you should return to. If there's no `next:` line, the stack is empty; ask the user what's next.
 
 The stack is LIFO: pop removes the most recent push, and the item beneath resumes as the focus. See the `/stack` skill for the full model.
 

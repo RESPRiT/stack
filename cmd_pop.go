@@ -37,5 +37,8 @@ func cmdPop(args []string) error {
 	if popped.Ref != "" {
 		fmt.Printf("  ref: %s\n", popped.Ref)
 	}
+	if n := len(s.Topics); n > 0 {
+		fmt.Printf("  next: %s\n", s.Topics[n-1].Topic)
+	}
 	return nil
 }
