@@ -12,11 +12,13 @@ import (
 	"stack/internal/tmuxpane"
 )
 
-// hookInput is the SessionStart payload Claude Code writes to stdin.
-// Only the fields stack reads are declared; extras are ignored.
+// hookInput is the SessionStart/SessionEnd payload Claude Code writes
+// to stdin. Only the fields stack reads are declared; extras are
+// ignored. Source is set on SessionStart, Reason on SessionEnd.
 type hookInput struct {
 	SessionID string `json:"session_id"`
 	Source    string `json:"source"`
+	Reason    string `json:"reason"`
 }
 
 func cmdHook(args []string) error {
@@ -27,6 +29,8 @@ func cmdHook(args []string) error {
 	switch sub {
 	case "session-start":
 		return cmdHookSessionStart(rest)
+	case "session-end":
+		return cmdHookSessionEnd(rest)
 	default:
 		return fmt.Errorf("unknown hook subcommand %q", sub)
 	}
@@ -82,6 +86,46 @@ func cmdHookSessionStart(args []string) error {
 		}
 	}
 	logHookFire(input.Source, input.SessionID, fmt.Sprintf("n=%d err=%v tmux_pane=%q", n, actErr, os.Getenv("TMUX_PANE")), raw)
+	return nil
+}
+
+// cmdHookSessionEnd reacts to Claude Code's SessionEnd event so the
+// stack panel doesn't outlive its parent session:
+//
+//   - reason=resume → no-op. The session is being saved so another can
+//     be resumed in its place; the SessionStart resume branch retargets
+//     the panel, and closing here would race it and lose the pane.
+//   - any other reason (clear, logout, prompt_input_exit, other, …) →
+//     dismiss the panel in the firing Claude Code's tmux window. The
+//     clear case is redundant with the SessionStart clear branch but
+//     idempotent; defaulting unknown reasons to close keeps the
+//     invariant simple: the pane never outlives the session.
+//
+// Same conventions as session-start: best-effort, silent on stdout
+// (SessionEnd output is ignored anyway), every fire logged to
+// ~/.stack/hook.log.
+func cmdHookSessionEnd(args []string) error {
+	fs := flag.NewFlagSet("hook session-end", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	raw, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return nil
+	}
+	var input hookInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		logHookFire("end/parse-error", "", err.Error(), raw)
+		return nil
+	}
+
+	var n int
+	var actErr error
+	if input.Reason != "resume" && os.Getenv("TMUX") != "" {
+		n, actErr = tmuxpane.CloseInCurrentWindow()
+	}
+	logHookFire("end/"+input.Reason, input.SessionID, fmt.Sprintf("n=%d err=%v tmux_pane=%q", n, actErr, os.Getenv("TMUX_PANE")), raw)
 	return nil
 }
 
