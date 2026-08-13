@@ -11,6 +11,8 @@ stack pop
 
 The topic you just popped is no longer the active focus. If the stack still has items, the new top is what you should return to. If empty, ask the user what's next.
 
+The stack is LIFO: pop removes the most recent push, and the item beneath resumes as the focus. See the `/stack` skill for the full model.
+
 If the command fails because the stack is empty, tell the user "(stack is empty)" and stop — don't infer that something must be popped.
 
 ## When the agent should self-invoke

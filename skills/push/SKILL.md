@@ -18,6 +18,8 @@ If the original is already in that range, unambiguous, and action-oriented, pass
 
 Then update your own working model: the topic you just pushed is now the active focus. When you finish it, call `/pop`. If the user asks "what are you working on?", read the top of the stack rather than guessing.
 
+The stack is LIFO: pushing suspends the old top beneath the new topic; popping resumes it. See the `/stack` skill for the full model.
+
 If the command fails (no `stack` binary on PATH, etc.), tell the user what went wrong and stop.
 
 ## When the agent should self-invoke
