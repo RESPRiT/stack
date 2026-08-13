@@ -8,7 +8,7 @@ import (
 // Version is the user-visible release marker. Shown in the TUI header
 // and by `stack --version`. Bumped manually per release; pre-1.0 while
 // the surface is still iterating.
-const Version = "0.1.30"
+const Version = "0.1.31"
 
 const usage = `stack — a topic stack for coding-agent sessions.
 

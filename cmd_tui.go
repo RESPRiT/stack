@@ -41,12 +41,12 @@ const (
 	scrollEndPad = 3
 	// scrollHoldEnd is the pause after horizontal scrolling reaches the
 	// end before the cycle resets to offset 0.
-	scrollHoldEnd = 10 * time.Second
+	scrollHoldEnd = 2 * time.Second
 	// scrollVStep advances the vertical view by one row every this often.
 	scrollVStep = 1 * time.Second
 	// scrollVHold is the pause at the bottom of the list before the
 	// vertical cycle restarts.
-	scrollVHold = 30 * time.Second
+	scrollVHold = 2 * time.Second
 	// tickInterval drives the scroll animation. 5 chars/sec implies a
 	// 200 ms tick keeps the motion smooth (one char per tick).
 	tickInterval = 200 * time.Millisecond
