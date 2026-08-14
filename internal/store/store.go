@@ -323,6 +323,45 @@ func Delete(sessionDir, name string) (int, error) {
 	return depth, nil
 }
 
+// MoveItem removes the item at user-facing 1-based top-first position
+// pos from the named source stack and pushes it onto the destination
+// stack's top, ref included — the atomic cross-stack move that a manual
+// pop + re-push can't do without dropping the ref. The destination is
+// created if it doesn't exist (like Push); source and destination must
+// differ (use Move for reordering within one stack).
+func MoveItem(sessionDir, fromName string, pos int, toName string) (Item, Stack, error) {
+	if fromName == toName {
+		return Item{}, Stack{}, fmt.Errorf("source and destination are both %q (use edit move to reorder within a stack)", fromName)
+	}
+	s, err := Load(sessionDir)
+	if err != nil {
+		return Item{}, Stack{}, err
+	}
+	src := s.find(fromName)
+	if src == nil {
+		return Item{}, Stack{}, s.noStackErr(fromName)
+	}
+	if len(src.Topics) == 0 {
+		return Item{}, Stack{}, ErrEmpty
+	}
+	idx, err := posToArrayIndex(pos, len(src.Topics))
+	if err != nil {
+		return Item{}, Stack{}, err
+	}
+	item := src.Topics[idx]
+	src.Topics = append(src.Topics[:idx], src.Topics[idx+1:]...)
+	dst := s.find(toName)
+	if dst == nil {
+		s.Stacks = append(s.Stacks, Named{Name: toName, Topics: []Item{}})
+		dst = &s.Stacks[len(s.Stacks)-1]
+	}
+	dst.Topics = append(dst.Topics, item)
+	if err := save(sessionDir, s); err != nil {
+		return Item{}, Stack{}, err
+	}
+	return item, s, nil
+}
+
 // posToArrayIndex maps a user-facing 1-based top-first position to the
 // on-disk 0-based bottom-first array index. Pos 1 (top) -> n-1; pos n
 // (bottom) -> 0. Out-of-range positions return an error.

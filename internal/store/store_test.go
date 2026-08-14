@@ -164,6 +164,48 @@ func TestPushPopNamedStacks(t *testing.T) {
 	}
 }
 
+func TestMoveItem(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Push(dir, Main, "focus work"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Push(dir, "backlog", "parked idea"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetRef(dir, "backlog", 1, "the ref"); err != nil {
+		t.Fatal(err)
+	}
+	// Promote backlog's top onto main: ref travels, lands on top.
+	item, s, err := MoveItem(dir, "backlog", 1, Main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item != (Item{Topic: "parked idea", Ref: "the ref"}) {
+		t.Errorf("moved item: got %+v", item)
+	}
+	topics, _ := s.Get(Main)
+	if topics[len(topics)-1] != item {
+		t.Errorf("main top: got %+v, want moved item", topics[len(topics)-1])
+	}
+	if s.Depth("backlog") != 0 {
+		t.Errorf("backlog should be empty, depth %d", s.Depth("backlog"))
+	}
+	// Same-stack move is an error; unknown source is an error.
+	if _, _, err := MoveItem(dir, Main, 1, Main); err == nil {
+		t.Error("same-stack move should fail")
+	}
+	if _, _, err := MoveItem(dir, "nope", 1, Main); !errors.Is(err, ErrNoStack) {
+		t.Errorf("unknown source: got %v, want ErrNoStack", err)
+	}
+	// Destination is created lazily.
+	if _, s, err = MoveItem(dir, Main, 1, "later"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Depth("later") != 1 {
+		t.Errorf("later should hold the moved item, depth %d", s.Depth("later"))
+	}
+}
+
 func TestItemJSON_RejectsGarbage(t *testing.T) {
 	var i Item
 	if err := json.Unmarshal([]byte(`42`), &i); err == nil {
