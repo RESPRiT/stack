@@ -2,6 +2,8 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -46,34 +48,31 @@ func TestItemJSON_WithRef(t *testing.T) {
 }
 
 func TestItemJSON_MixedArray(t *testing.T) {
-	// A Stack-shaped JSON with a mix of bare strings and objects loads
-	// and saves preserving each entry's shape.
-	raw := `{
-  "topics": [
+	// A topics array with a mix of bare strings and objects loads and
+	// saves preserving each entry's shape.
+	raw := `[
     "topic A",
     {"topic": "topic B", "ref": "with ref"},
     "topic C"
-  ],
-  "updated_at": "2026-05-19T22:00:00Z"
-}`
-	var s Stack
-	if err := json.Unmarshal([]byte(raw), &s); err != nil {
-		t.Fatalf("unmarshal stack: %v", err)
+  ]`
+	var topics []Item
+	if err := json.Unmarshal([]byte(raw), &topics); err != nil {
+		t.Fatalf("unmarshal topics: %v", err)
 	}
-	if len(s.Topics) != 3 {
-		t.Fatalf("topics: got %d, want 3", len(s.Topics))
+	if len(topics) != 3 {
+		t.Fatalf("topics: got %d, want 3", len(topics))
 	}
-	if s.Topics[0] != (Item{Topic: "topic A"}) {
-		t.Errorf("topics[0]: got %+v", s.Topics[0])
+	if topics[0] != (Item{Topic: "topic A"}) {
+		t.Errorf("topics[0]: got %+v", topics[0])
 	}
-	if s.Topics[1] != (Item{Topic: "topic B", Ref: "with ref"}) {
-		t.Errorf("topics[1]: got %+v", s.Topics[1])
+	if topics[1] != (Item{Topic: "topic B", Ref: "with ref"}) {
+		t.Errorf("topics[1]: got %+v", topics[1])
 	}
-	if s.Topics[2] != (Item{Topic: "topic C"}) {
-		t.Errorf("topics[2]: got %+v", s.Topics[2])
+	if topics[2] != (Item{Topic: "topic C"}) {
+		t.Errorf("topics[2]: got %+v", topics[2])
 	}
 	// Re-marshal and check that bare strings stay bare and objects stay objects.
-	out, err := json.Marshal(s.Topics)
+	out, err := json.Marshal(topics)
 	if err != nil {
 		t.Fatalf("re-marshal topics: %v", err)
 	}
@@ -83,6 +82,85 @@ func TestItemJSON_MixedArray(t *testing.T) {
 	}
 	if !strings.Contains(str, `"topic":"topic B"`) || !strings.Contains(str, `"ref":"with ref"`) {
 		t.Errorf("expected object preserved: %s", str)
+	}
+}
+
+func TestLoad_MigratesLegacyTopics(t *testing.T) {
+	// A legacy {"topics": [...]} file loads as main's topics.
+	dir := t.TempDir()
+	legacy := `{
+  "topics": ["bottom", {"topic": "top", "ref": "r"}],
+  "updated_at": "2026-05-19T22:00:00Z"
+}`
+	if err := os.WriteFile(Path(dir), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := s.Names(); len(got) != 1 || got[0] != Main {
+		t.Fatalf("names: got %v, want [main]", got)
+	}
+	topics, _ := s.Get(Main)
+	if len(topics) != 2 || topics[1] != (Item{Topic: "top", Ref: "r"}) {
+		t.Errorf("main topics: got %+v", topics)
+	}
+}
+
+func TestLoad_MainAlwaysFirst(t *testing.T) {
+	// normalize keeps main at index 0 even if the file orders it later,
+	// and synthesizes it when absent.
+	dir := t.TempDir()
+	raw := `{"stacks": [{"name": "backlog", "topics": ["idea"]}, {"name": "main", "topics": ["work"]}]}`
+	if err := os.WriteFile(Path(dir), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := s.Names(); got[0] != Main || got[1] != "backlog" {
+		t.Errorf("names: got %v, want [main backlog]", got)
+	}
+}
+
+func TestPushPopNamedStacks(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Push(dir, Main, "feature work"); err != nil {
+		t.Fatal(err)
+	}
+	// Lazy creation of a named stack on first push.
+	s, err := Push(dir, "backlog", "an idea")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Names(); len(got) != 2 || got[1] != "backlog" {
+		t.Fatalf("names: got %v", got)
+	}
+	// Pop targets the named stack, not main.
+	popped, after, err := Pop(dir, "backlog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if popped.Topic != "an idea" || len(after) != 0 {
+		t.Errorf("pop backlog: got %+v, after %d", popped, len(after))
+	}
+	// Emptied stacks persist.
+	s, _ = Load(dir)
+	if got := s.Names(); len(got) != 2 {
+		t.Errorf("emptied stack should persist: %v", got)
+	}
+	// Pop on an unknown stack errors.
+	if _, _, err := Pop(dir, "nope"); !errors.Is(err, ErrNoStack) {
+		t.Errorf("pop unknown: got %v, want ErrNoStack", err)
+	}
+	// Delete removes; main is protected.
+	if n, err := Delete(dir, "backlog"); err != nil || n != 0 {
+		t.Errorf("delete: n=%d err=%v", n, err)
+	}
+	if _, err := Delete(dir, Main); err == nil {
+		t.Error("delete main should fail")
 	}
 }
 

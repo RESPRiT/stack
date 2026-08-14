@@ -1,13 +1,26 @@
 // Package store reads and writes a session's stack.json.
 //
-// The on-disk shape is intentionally trivial — a JSON document with a
-// list of topics where the last element is the top of the stack — so a
-// human (or a coding agent) can inspect and edit it directly.
+// The on-disk shape is intentionally trivial — a JSON document holding
+// named stacks, each a list of topics where the last element is the top
+// — so a human (or a coding agent) can inspect and edit it directly.
 //
-// Each entry in `topics` is either a bare string (just the topic, no
-// ref) or a `{"topic": "...", "ref": "..."}` object. Ref-less items
-// stay as bare strings on save so hand-editing remains easy for the
-// common case.
+//	{
+//	  "stacks": [
+//	    {"name": "main", "topics": ["older", "top of main"]},
+//	    {"name": "backlog", "topics": ["an idea"]}
+//	  ],
+//	  "updated_at": "..."
+//	}
+//
+// The "main" stack always exists, is always first, and is the session's
+// current focus. Other stacks keep their creation order. Legacy files
+// with a top-level `topics` array load as main's topics and adopt the
+// new shape on the next save.
+//
+// Each entry in a `topics` array is either a bare string (just the
+// topic, no ref) or a `{"topic": "...", "ref": "..."}` object. Ref-less
+// items stay as bare strings on save so hand-editing remains easy for
+// the common case.
 package store
 
 import (
@@ -17,15 +30,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
+
+// Main is the name of the default stack: the one commands target
+// without --stack, and the one whose top is the session's current
+// focus. It always exists and cannot be deleted.
+const Main = "main"
 
 // MaxRefBytes is the soft size cap for a single Item's Ref. Saves
 // above this size still proceed; a warning is written to os.Stderr so
 // the user notices the bloat.
 const MaxRefBytes = 1024
 
-// Item is one entry on the stack: the topic text plus an optional
+// Item is one entry on a stack: the topic text plus an optional
 // free-form ref the user (or agent) attaches for future reference. An
 // Item with empty Ref marshals as a bare JSON string so the stack
 // file stays hand-editable for the common case.
@@ -72,12 +91,86 @@ func (i *Item) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Named is one named stack: a name plus its topics, bottom-first (the
+// last element is the top).
+type Named struct {
+	Name   string `json:"name"`
+	Topics []Item `json:"topics"`
+}
+
+// Stack is a session's full stack state: the ordered set of named
+// stacks. Stacks[0] is always Main.
 type Stack struct {
-	Topics    []Item    `json:"topics"`
+	Stacks    []Named   `json:"stacks"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-var ErrEmpty = errors.New("stack is empty")
+var (
+	ErrEmpty   = errors.New("stack is empty")
+	ErrNoStack = errors.New("no such stack")
+)
+
+// noStackErr wraps ErrNoStack with the requested name and the names
+// that do exist, so CLI errors are self-explanatory.
+func (s Stack) noStackErr(name string) error {
+	return fmt.Errorf("%w: %q (have: %s)", ErrNoStack, name, strings.Join(s.Names(), ", "))
+}
+
+// find returns a pointer to the named stack, or nil.
+func (s *Stack) find(name string) *Named {
+	for i := range s.Stacks {
+		if s.Stacks[i].Name == name {
+			return &s.Stacks[i]
+		}
+	}
+	return nil
+}
+
+// Get returns the named stack's topics and whether the stack exists.
+func (s Stack) Get(name string) ([]Item, bool) {
+	if n := (&s).find(name); n != nil {
+		return n.Topics, true
+	}
+	return nil, false
+}
+
+// Depth returns the named stack's topic count (0 if it doesn't exist).
+func (s Stack) Depth(name string) int {
+	topics, _ := s.Get(name)
+	return len(topics)
+}
+
+// Names returns the stack names in display order: Main first, then
+// creation order.
+func (s Stack) Names() []string {
+	out := make([]string, len(s.Stacks))
+	for i, n := range s.Stacks {
+		out[i] = n.Name
+	}
+	return out
+}
+
+// normalize guarantees the Main stack exists at index 0 and that no
+// stack has nil Topics. Called on every load so both migrated legacy
+// files and hand-edited ones end up in canonical shape.
+func (s *Stack) normalize() {
+	for i := range s.Stacks {
+		if s.Stacks[i].Topics == nil {
+			s.Stacks[i].Topics = []Item{}
+		}
+	}
+	for i := range s.Stacks {
+		if s.Stacks[i].Name == Main {
+			if i != 0 {
+				m := s.Stacks[i]
+				s.Stacks = append(s.Stacks[:i], s.Stacks[i+1:]...)
+				s.Stacks = append([]Named{m}, s.Stacks...)
+			}
+			return
+		}
+	}
+	s.Stacks = append([]Named{{Name: Main, Topics: []Item{}}}, s.Stacks...)
+}
 
 func Path(sessionDir string) string {
 	return filepath.Join(sessionDir, "stack.json")
@@ -88,17 +181,27 @@ func Load(sessionDir string) (Stack, error) {
 	b, err := os.ReadFile(p)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Stack{Topics: []Item{}}, nil
+			s := Stack{}
+			s.normalize()
+			return s, nil
 		}
 		return Stack{}, fmt.Errorf("read %s: %w", p, err)
 	}
-	var s Stack
-	if err := json.Unmarshal(b, &s); err != nil {
+	// Accept both shapes: the current {"stacks": [...]} document and the
+	// legacy {"topics": [...]} one, which migrates to main's topics.
+	var raw struct {
+		Stacks    []Named   `json:"stacks"`
+		Topics    []Item    `json:"topics"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
 		return Stack{}, fmt.Errorf("parse %s: %w", p, err)
 	}
-	if s.Topics == nil {
-		s.Topics = []Item{}
+	s := Stack{Stacks: raw.Stacks, UpdatedAt: raw.UpdatedAt}
+	if s.Stacks == nil && raw.Topics != nil {
+		s.Stacks = []Named{{Name: Main, Topics: raw.Topics}}
 	}
+	s.normalize()
 	return s, nil
 }
 
@@ -114,10 +217,12 @@ func save(sessionDir string, s Stack) error {
 		return fmt.Errorf("mkdir %s: %w", sessionDir, err)
 	}
 	s.UpdatedAt = time.Now().UTC()
-	for _, it := range s.Topics {
-		if n := len(it.Ref); n > MaxRefBytes {
-			fmt.Fprintf(os.Stderr, "stack: warning: ref for %q is %d bytes (cap %d)\n",
-				it.Topic, n, MaxRefBytes)
+	for _, st := range s.Stacks {
+		for _, it := range st.Topics {
+			if n := len(it.Ref); n > MaxRefBytes {
+				fmt.Fprintf(os.Stderr, "stack: warning: ref for %q is %d bytes (cap %d)\n",
+					it.Topic, n, MaxRefBytes)
+			}
 		}
 	}
 	b, err := json.MarshalIndent(s, "", "  ")
@@ -148,32 +253,74 @@ func save(sessionDir string, s Stack) error {
 	return nil
 }
 
-func Push(sessionDir, topic string) (Stack, error) {
+// Push appends a topic to the named stack, creating the stack if it
+// doesn't exist yet (lazy creation — there is no separate "new stack"
+// verb).
+func Push(sessionDir, name, topic string) (Stack, error) {
 	s, err := Load(sessionDir)
 	if err != nil {
 		return Stack{}, err
 	}
-	s.Topics = append(s.Topics, Item{Topic: topic})
+	n := s.find(name)
+	if n == nil {
+		s.Stacks = append(s.Stacks, Named{Name: name, Topics: []Item{}})
+		n = &s.Stacks[len(s.Stacks)-1]
+	}
+	n.Topics = append(n.Topics, Item{Topic: topic})
 	if err := save(sessionDir, s); err != nil {
 		return Stack{}, err
 	}
 	return s, nil
 }
 
-func Pop(sessionDir string) (popped Item, after Stack, err error) {
+// Pop removes and returns the named stack's top item, plus the stack's
+// remaining topics. Unknown names error (only Push creates stacks); an
+// emptied stack persists until Delete.
+func Pop(sessionDir, name string) (popped Item, after []Item, err error) {
 	s, err := Load(sessionDir)
 	if err != nil {
-		return Item{}, Stack{}, err
+		return Item{}, nil, err
 	}
-	if len(s.Topics) == 0 {
-		return Item{}, s, ErrEmpty
+	n := s.find(name)
+	if n == nil {
+		return Item{}, nil, s.noStackErr(name)
 	}
-	popped = s.Topics[len(s.Topics)-1]
-	s.Topics = s.Topics[:len(s.Topics)-1]
+	if len(n.Topics) == 0 {
+		return Item{}, nil, ErrEmpty
+	}
+	popped = n.Topics[len(n.Topics)-1]
+	n.Topics = n.Topics[:len(n.Topics)-1]
 	if err := save(sessionDir, s); err != nil {
-		return Item{}, Stack{}, err
+		return Item{}, nil, err
 	}
-	return popped, s, nil
+	return popped, n.Topics, nil
+}
+
+// Delete removes the named stack entirely. Main is undeletable; unknown
+// names error. Returns the deleted stack's topic count.
+func Delete(sessionDir, name string) (int, error) {
+	if name == Main {
+		return 0, fmt.Errorf("cannot delete the %q stack", Main)
+	}
+	s, err := Load(sessionDir)
+	if err != nil {
+		return 0, err
+	}
+	n := s.find(name)
+	if n == nil {
+		return 0, s.noStackErr(name)
+	}
+	depth := len(n.Topics)
+	for i := range s.Stacks {
+		if s.Stacks[i].Name == name {
+			s.Stacks = append(s.Stacks[:i], s.Stacks[i+1:]...)
+			break
+		}
+	}
+	if err := save(sessionDir, s); err != nil {
+		return 0, err
+	}
+	return depth, nil
 }
 
 // posToArrayIndex maps a user-facing 1-based top-first position to the
@@ -186,81 +333,80 @@ func posToArrayIndex(pos, n int) (int, error) {
 	return n - pos, nil
 }
 
-// Rename replaces the topic at user-facing position pos with newText.
-// The ref (if any) is preserved. pos is 1-based top-first.
-func Rename(sessionDir string, pos int, newText string) (Stack, error) {
+// mutate loads the session, resolves the named stack (erroring on
+// unknown names or an empty stack), applies fn to it, and saves. The
+// shared shape of Rename/Move/SetRef.
+func mutate(sessionDir, name string, fn func(*Named) error) (Stack, error) {
 	s, err := Load(sessionDir)
 	if err != nil {
 		return Stack{}, err
 	}
-	if len(s.Topics) == 0 {
+	n := s.find(name)
+	if n == nil {
+		return s, s.noStackErr(name)
+	}
+	if len(n.Topics) == 0 {
 		return s, ErrEmpty
 	}
-	idx, err := posToArrayIndex(pos, len(s.Topics))
-	if err != nil {
+	if err := fn(n); err != nil {
 		return s, err
 	}
-	s.Topics[idx].Topic = newText
 	if err := save(sessionDir, s); err != nil {
 		return Stack{}, err
 	}
 	return s, nil
+}
+
+// Rename replaces the topic at user-facing position pos with newText.
+// The ref (if any) is preserved. pos is 1-based top-first.
+func Rename(sessionDir, name string, pos int, newText string) (Stack, error) {
+	return mutate(sessionDir, name, func(n *Named) error {
+		idx, err := posToArrayIndex(pos, len(n.Topics))
+		if err != nil {
+			return err
+		}
+		n.Topics[idx].Topic = newText
+		return nil
+	})
 }
 
 // Move re-orders the topic at position from to position to. Both are
 // 1-based top-first. A no-op (from == to) succeeds silently. Ref
 // travels with the item.
-func Move(sessionDir string, from, to int) (Stack, error) {
-	s, err := Load(sessionDir)
-	if err != nil {
-		return Stack{}, err
-	}
-	n := len(s.Topics)
-	if n == 0 {
-		return s, ErrEmpty
-	}
-	fi, err := posToArrayIndex(from, n)
-	if err != nil {
-		return s, err
-	}
-	ti, err := posToArrayIndex(to, n)
-	if err != nil {
-		return s, err
-	}
-	if fi == ti {
-		return s, nil
-	}
-	item := s.Topics[fi]
-	without := append([]Item(nil), s.Topics[:fi]...)
-	without = append(without, s.Topics[fi+1:]...)
-	if ti > len(without) {
-		ti = len(without)
-	}
-	s.Topics = append(without[:ti], append([]Item{item}, without[ti:]...)...)
-	if err := save(sessionDir, s); err != nil {
-		return Stack{}, err
-	}
-	return s, nil
+func Move(sessionDir, name string, from, to int) (Stack, error) {
+	return mutate(sessionDir, name, func(n *Named) error {
+		fi, err := posToArrayIndex(from, len(n.Topics))
+		if err != nil {
+			return err
+		}
+		ti, err := posToArrayIndex(to, len(n.Topics))
+		if err != nil {
+			return err
+		}
+		if fi == ti {
+			return nil
+		}
+		item := n.Topics[fi]
+		without := append([]Item(nil), n.Topics[:fi]...)
+		without = append(without, n.Topics[fi+1:]...)
+		if ti > len(without) {
+			ti = len(without)
+		}
+		n.Topics = append(without[:ti], append([]Item{item}, without[ti:]...)...)
+		return nil
+	})
 }
 
 // SetRef sets the ref for the item at user-facing 1-based top-first
 // position pos. An empty string clears the ref (the item reverts to a
 // bare string on disk).
-func SetRef(sessionDir string, pos int, ref string) (Stack, error) {
-	s, err := Load(sessionDir)
-	if err != nil {
-		return Stack{}, err
-	}
-	if len(s.Topics) == 0 {
-		return s, ErrEmpty
-	}
-	idx, err := posToArrayIndex(pos, len(s.Topics))
-	if err != nil {
-		return s, err
-	}
-	s.Topics[idx].Ref = ref
-	if err := save(sessionDir, s); err != nil {
-		return Stack{}, err
-	}
-	return s, nil
+func SetRef(sessionDir, name string, pos int, ref string) (Stack, error) {
+	return mutate(sessionDir, name, func(n *Named) error {
+		idx, err := posToArrayIndex(pos, len(n.Topics))
+		if err != nil {
+			return err
+		}
+		n.Topics[idx].Ref = ref
+		return nil
+	})
 }

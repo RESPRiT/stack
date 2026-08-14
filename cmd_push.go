@@ -15,6 +15,7 @@ import (
 func cmdPush(args []string) error {
 	fs := flag.NewFlagSet("push", flag.ContinueOnError)
 	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")
+	name := fs.String("stack", store.Main, "target stack (created on first push)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -26,16 +27,19 @@ func cmdPush(args []string) error {
 	if topic == "" {
 		return errors.New("topic cannot be empty")
 	}
+	if *name == "" {
+		return errors.New("stack name cannot be empty")
+	}
 
 	id, dir, err := session.ResolveOrCreate(*sess)
 	if err != nil {
 		return err
 	}
-	s, err := store.Push(dir, topic)
+	s, err := store.Push(dir, *name, topic)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("pushed onto %s (depth %d): %s\n", id, len(s.Topics), topic)
+	fmt.Printf("pushed onto %s (depth %d): %s\n", targetLabel(id, *name), s.Depth(*name), topic)
 	if err := tmuxpane.EnsureRunning(id); err != nil {
 		fmt.Fprintf(os.Stderr, "stack: tui auto-spawn failed: %v\n", err)
 	}

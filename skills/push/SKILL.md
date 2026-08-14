@@ -20,6 +20,8 @@ Then update your own working model: the topic you just pushed is now the active 
 
 The stack is LIFO: pushing suspends the old top beneath the new topic; popping resumes it. See the `/stack` skill for the full model.
 
+To record something that is *not* the current focus — a parked idea, a someday task — push it to a named stack instead of `main`: `stack push --stack backlog "<topic>"`. Named stacks are created on their first push and don't disturb the `▶` focus. Reserve plain `/push` for work you're actually starting.
+
 If the command fails (no `stack` binary on PATH, etc.), tell the user what went wrong and stop.
 
 ## When the agent should self-invoke

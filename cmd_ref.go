@@ -21,6 +21,7 @@ import (
 func cmdRef(args []string) error {
 	fs := flag.NewFlagSet("ref", flag.ContinueOnError)
 	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")
+	name := fs.String("stack", store.Main, "target stack")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -56,13 +57,18 @@ func cmdRef(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(cur.Topics) == 0 {
-		return fmt.Errorf("stack for %s is empty", id)
+	topics, ok := cur.Get(*name)
+	if !ok {
+		return fmt.Errorf("no stack named %q (have: %s)", *name, strings.Join(cur.Names(), ", "))
 	}
-	pos, err := parsePosition(posArg, len(cur.Topics))
+	if len(topics) == 0 {
+		return fmt.Errorf("stack for %s is empty", targetLabel(id, *name))
+	}
+	pos, err := parsePosition(posArg, len(topics))
 	if err != nil {
 		return err
 	}
+	label := targetLabel(id, *name)
 
 	// Resolve the mode. --clear wins outright; an explicit '-' arg
 	// triggers stdin; otherwise positional text sets inline; otherwise
@@ -72,10 +78,10 @@ func cmdRef(args []string) error {
 		if len(textParts) > 0 {
 			return errors.New("--clear takes no text argument")
 		}
-		if _, err := store.SetRef(dir, pos, ""); err != nil {
+		if _, err := store.SetRef(dir, *name, pos, ""); err != nil {
 			return err
 		}
-		fmt.Printf("cleared ref at position %d in %s\n", pos, id)
+		fmt.Printf("cleared ref at position %d in %s\n", pos, label)
 		return nil
 
 	case len(textParts) == 1 && textParts[0] == "-":
@@ -86,10 +92,10 @@ func cmdRef(args []string) error {
 		// Trim only trailing newlines — interior whitespace is the
 		// user's content.
 		text := strings.TrimRight(string(raw), "\n")
-		if _, err := store.SetRef(dir, pos, text); err != nil {
+		if _, err := store.SetRef(dir, *name, pos, text); err != nil {
 			return err
 		}
-		fmt.Printf("set ref at position %d in %s (%d bytes from stdin)\n", pos, id, len(text))
+		fmt.Printf("set ref at position %d in %s (%d bytes from stdin)\n", pos, label, len(text))
 		return nil
 
 	case len(textParts) > 0:
@@ -97,17 +103,17 @@ func cmdRef(args []string) error {
 		if text == "" {
 			return errors.New("ref text cannot be only whitespace; use --clear to remove")
 		}
-		if _, err := store.SetRef(dir, pos, text); err != nil {
+		if _, err := store.SetRef(dir, *name, pos, text); err != nil {
 			return err
 		}
-		fmt.Printf("set ref at position %d in %s\n", pos, id)
+		fmt.Printf("set ref at position %d in %s\n", pos, label)
 		return nil
 
 	default:
 		// No text → print mode.
-		idx := len(cur.Topics) - pos
-		fmt.Print(cur.Topics[idx].Ref)
-		if cur.Topics[idx].Ref != "" && !strings.HasSuffix(cur.Topics[idx].Ref, "\n") {
+		idx := len(topics) - pos
+		fmt.Print(topics[idx].Ref)
+		if topics[idx].Ref != "" && !strings.HasSuffix(topics[idx].Ref, "\n") {
 			fmt.Println()
 		}
 		return nil

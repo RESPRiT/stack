@@ -13,6 +13,8 @@ The topic you just popped is no longer the active focus. If the stack still has 
 
 The stack is LIFO: pop removes the most recent push, and the item beneath resumes as the focus. See the `/stack` skill for the full model.
 
+Plain `stack pop` always targets `main`, the session focus. To clear an item from a named stack (e.g. a done `backlog` entry), pass `--stack <name>` — that never touches the focus.
+
 If the command fails because the stack is empty, tell the user "(stack is empty)" and stop — don't infer that something must be popped.
 
 ## When the agent should self-invoke

@@ -9,9 +9,20 @@ import (
 	"stack/internal/store"
 )
 
+// targetLabel names a (session, stack) pair in command output: just the
+// session id when targeting main, "<id>/<stack>" otherwise, so the
+// default-path output is unchanged from the single-stack days.
+func targetLabel(id, name string) string {
+	if name == store.Main {
+		return id
+	}
+	return id + "/" + name
+}
+
 func cmdPop(args []string) error {
 	fs := flag.NewFlagSet("pop", flag.ContinueOnError)
 	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")
+	name := fs.String("stack", store.Main, "target stack")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -26,19 +37,19 @@ func cmdPop(args []string) error {
 		}
 		return err
 	}
-	popped, s, err := store.Pop(dir)
+	popped, after, err := store.Pop(dir, *name)
 	if err != nil {
 		if errors.Is(err, store.ErrEmpty) {
-			return fmt.Errorf("stack for %s is empty", id)
+			return fmt.Errorf("stack for %s is empty", targetLabel(id, *name))
 		}
 		return err
 	}
-	fmt.Printf("popped from %s (depth %d): %s\n", id, len(s.Topics), popped.Topic)
+	fmt.Printf("popped from %s (depth %d): %s\n", targetLabel(id, *name), len(after), popped.Topic)
 	if popped.Ref != "" {
 		fmt.Printf("  ref: %s\n", popped.Ref)
 	}
-	if n := len(s.Topics); n > 0 {
-		fmt.Printf("  next: %s\n", s.Topics[n-1].Topic)
+	if len(after) > 0 {
+		fmt.Printf("  next: %s\n", after[len(after)-1].Topic)
 	}
 	return nil
 }

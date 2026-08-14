@@ -29,6 +29,7 @@ func cmdEdit(args []string) error {
 func cmdEditRename(args []string) error {
 	fs := flag.NewFlagSet("edit rename", flag.ContinueOnError)
 	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")
+	name := fs.String("stack", store.Main, "target stack")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -49,27 +50,44 @@ func cmdEditRename(args []string) error {
 		}
 		return err
 	}
+	topics, label, err := editTarget(dir, id, *name)
+	if err != nil {
+		return err
+	}
+	pos, err := parsePosition(posArg, len(topics))
+	if err != nil {
+		return err
+	}
+	if _, err := store.Rename(dir, *name, pos, newText); err != nil {
+		return err
+	}
+	fmt.Printf("renamed position %d in %s: %s\n", pos, label, newText)
+	return nil
+}
+
+// editTarget loads the session and resolves the named stack for an edit
+// op, translating "unknown stack" and "empty stack" into the friendly
+// errors every edit-family command shares.
+func editTarget(dir, id, name string) ([]store.Item, string, error) {
 	cur, err := store.Load(dir)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
-	if len(cur.Topics) == 0 {
-		return fmt.Errorf("stack for %s is empty", id)
+	topics, ok := cur.Get(name)
+	if !ok {
+		return nil, "", fmt.Errorf("no stack named %q (have: %s)", name, strings.Join(cur.Names(), ", "))
 	}
-	pos, err := parsePosition(posArg, len(cur.Topics))
-	if err != nil {
-		return err
+	label := targetLabel(id, name)
+	if len(topics) == 0 {
+		return nil, "", fmt.Errorf("stack for %s is empty", label)
 	}
-	if _, err := store.Rename(dir, pos, newText); err != nil {
-		return err
-	}
-	fmt.Printf("renamed position %d in %s: %s\n", pos, id, newText)
-	return nil
+	return topics, label, nil
 }
 
 func cmdEditMove(args []string) error {
 	fs := flag.NewFlagSet("edit move", flag.ContinueOnError)
 	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")
+	name := fs.String("stack", store.Main, "target stack")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -84,18 +102,15 @@ func cmdEditMove(args []string) error {
 		}
 		return err
 	}
-	cur, err := store.Load(dir)
+	topics, label, err := editTarget(dir, id, *name)
 	if err != nil {
 		return err
 	}
-	if len(cur.Topics) == 0 {
-		return fmt.Errorf("stack for %s is empty", id)
-	}
-	from, err := parsePosition(rest[0], len(cur.Topics))
+	from, err := parsePosition(rest[0], len(topics))
 	if err != nil {
 		return err
 	}
-	to, err := parsePosition(rest[1], len(cur.Topics))
+	to, err := parsePosition(rest[1], len(topics))
 	if err != nil {
 		return err
 	}
@@ -103,10 +118,10 @@ func cmdEditMove(args []string) error {
 		fmt.Printf("no-op: position %d already at target\n", from)
 		return nil
 	}
-	if _, err := store.Move(dir, from, to); err != nil {
+	if _, err := store.Move(dir, *name, from, to); err != nil {
 		return err
 	}
-	fmt.Printf("moved position %d → %d in %s\n", from, to, id)
+	fmt.Printf("moved position %d → %d in %s\n", from, to, label)
 	return nil
 }
 

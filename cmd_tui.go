@@ -199,7 +199,7 @@ func startWatcher(dir string, ch chan<- tea.Msg) (*fsnotify.Watcher, error) {
 type model struct {
 	sessionID      string
 	sessionDir     string
-	topics         []store.Item
+	stacks         []store.Named
 	updatedAt      time.Time
 	width          int
 	height         int
@@ -222,11 +222,49 @@ func (m *model) reload() {
 		return
 	}
 	m.err = nil
-	m.topics = s.Topics
+	m.stacks = s.Stacks
 	m.updatedAt = s.UpdatedAt
 	// Any state change restarts the scroll cycle so the user sees the
 	// new content from offset 0 rather than mid-scroll.
 	m.scrollAnchor = time.Now()
+}
+
+// mainTopics is the main stack's items — the list that gets the ▶
+// focus marker, the horizontal scroll animation, and the ref view.
+func (m model) mainTopics() []store.Item {
+	for _, n := range m.stacks {
+		if n.Name == store.Main {
+			return n.Topics
+		}
+	}
+	return nil
+}
+
+// extraStacks is every non-main stack, in creation order. Rendered as
+// labeled sections below main's topics.
+func (m model) extraStacks() []store.Named {
+	var out []store.Named
+	for _, n := range m.stacks {
+		if n.Name != store.Main {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// totalContentRows is the row count of the full content area: main's
+// topics (or its 1-row empty placeholder), plus, per non-main stack, a
+// blank separator and a header row, plus that stack's items. Drives
+// both the vertical-scroll budget and the auto-resize height.
+func (m model) totalContentRows() int {
+	rows := len(m.mainTopics())
+	if rows == 0 {
+		rows = 1 // "(empty …)" placeholder row
+	}
+	for _, n := range m.extraStacks() {
+		rows += 2 + len(n.Topics) // blank + "name (depth)" header + items
+	}
+	return rows
 }
 
 func (m model) Init() tea.Cmd {
@@ -262,7 +300,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "c":
 			// Toggle the per-pane ref view (shows the top item's ref
 			// if it has one). No-op when there's no top item.
-			if len(m.topics) > 0 {
+			if len(m.mainTopics()) > 0 {
 				m.refView = !m.refView
 			}
 			return m, waitForEvent(m.events)
@@ -435,11 +473,11 @@ func (m model) contentRows() int {
 	return r
 }
 
-// maxVerticalOffset is the number of topics that won't fit on screen
-// when the topic list is rendered top-down from the head. Zero means
-// the whole stack fits.
+// maxVerticalOffset is the number of content rows that won't fit on
+// screen when the content area is rendered top-down from the head.
+// Zero means everything fits.
 func (m model) maxVerticalOffset() int {
-	off := len(m.topics) - m.contentRows()
+	off := m.totalContentRows() - m.contentRows()
 	if off < 0 {
 		return 0
 	}
@@ -465,16 +503,17 @@ func (m model) verticalOffset() int {
 	return step
 }
 
-// maxScrollOffset returns the largest offset needed across all topics to
-// reach their respective ends. 0 means nothing needs scrolling at the
-// current pane width.
+// maxScrollOffset returns the largest offset needed across main's
+// topics to reach their respective ends. 0 means nothing needs
+// scrolling at the current pane width. Non-main sections don't animate
+// — their over-width rows are simply clipped.
 func (m *model) maxScrollOffset() int {
 	w := m.topicRenderWidth()
 	if w <= 0 {
 		return 0
 	}
 	max := 0
-	for _, t := range m.topics {
+	for _, t := range m.mainTopics() {
 		l := len([]rune(t.Topic))
 		if l <= w {
 			continue
@@ -515,8 +554,9 @@ func (m model) horizontalOffset(topicIdx, topicRunes int) int {
 		return 0
 	}
 	phaseElapsed := elapsed - scrollStable
+	topics := m.mainTopics()
 	for _, idx := range m.overlongTopicIndices() {
-		runes := len([]rune(m.topics[idx].Topic)) + scrollEndPad
+		runes := len([]rune(topics[idx].Topic)) + scrollEndPad
 		topicMaxOff := runes - w
 		if topicMaxOff <= 0 {
 			continue
@@ -540,17 +580,18 @@ func (m model) horizontalOffset(topicIdx, topicRunes int) int {
 	return 0
 }
 
-// overlongTopicIndices returns the indices of topics that exceed the
-// pane render width, ordered top-first (largest index → smallest).
+// overlongTopicIndices returns the indices of main topics that exceed
+// the pane render width, ordered top-first (largest index → smallest).
 // Used by the serial horizontal-scroll cycle.
 func (m model) overlongTopicIndices() []int {
 	w := m.topicRenderWidth()
 	if w <= 0 {
 		return nil
 	}
+	topics := m.mainTopics()
 	var out []int
-	for i := len(m.topics) - 1; i >= 0; i-- {
-		if len([]rune(m.topics[i].Topic)) > w {
+	for i := len(topics) - 1; i >= 0; i-- {
+		if len([]rune(topics[i].Topic)) > w {
 			out = append(out, i)
 		}
 	}
@@ -568,7 +609,7 @@ func (m model) horizontalCycleEnd() time.Duration {
 	}
 	total := time.Duration(0)
 	any := false
-	for _, t := range m.topics {
+	for _, t := range m.mainTopics() {
 		runes := len([]rune(t.Topic))
 		if runes <= w {
 			continue
@@ -602,41 +643,37 @@ func (m *model) maybeResize() {
 	if winRows <= 0 {
 		winRows = m.height * 2 // fallback: assume we're using half the window
 	}
-	desired := desiredPaneHeight(len(m.topics), winRows)
+	desired := desiredPaneHeight(m.totalContentRows(), winRows)
 	if desired == m.height {
 		return
 	}
 	_ = exec.Command("tmux", "resize-pane", "-t", paneID, "-y", strconv.Itoa(desired)).Run()
 }
 
-// desiredPaneHeight returns the pane row count that fits the current
-// stack content plus chrome — title, blank, topics (or empty
-// placeholder), blank, footer — with a one-row tail gap below the
-// footer so the pane never feels crammed against the divider.
-// Clamped to never go below 6 rows or above 35 % of the window.
-func desiredPaneHeight(stackLen, windowRows int) int {
+// desiredPaneHeight returns the pane row count that fits contentRows
+// (the full content area: main's topics or its empty placeholder, plus
+// any non-main sections) plus chrome — title, blank, blank, footer —
+// with a one-row tail gap below the footer so the pane never feels
+// crammed against the divider. Clamped to never go below 6 rows or
+// above 35 % of the window.
+func desiredPaneHeight(contentRows, windowRows int) int {
 	const (
-		// View() renders 4 chrome rows around the topics list (title,
+		// View() renders 4 chrome rows around the content area (title,
 		// blank, blank, footer) plus a 2-row tail gap. Both contribute
 		// to the chrome-and-gap budget that contentRows() subtracts.
 		// Must stay in sync with chromeAndGapRows.
-		chromeRows   = chromeAndGapRows
-		emptyContent = 1 // "(empty — push a topic …)"
+		chromeRows = chromeAndGapRows
 		// minPaneRows is one above chromeRows so contentRows() is
-		// always ≥ 1 — otherwise the topic loop has zero rows to
+		// always ≥ 1 — otherwise the content loop has zero rows to
 		// render into and the pane shows blank between the chrome.
 		minPaneRows = chromeAndGapRows + 1
 		// maxWindowPercent caps the pane at this fraction of the
 		// window's row count. 35 leaves the main pane the majority of
-		// the screen even when the stack is deep enough to trigger
+		// the screen even when the content is deep enough to trigger
 		// vertical-scroll mode.
 		maxWindowPercent = 35
 	)
-	content := stackLen
-	if stackLen == 0 {
-		content = emptyContent
-	}
-	h := content + chromeRows
+	h := contentRows + chromeRows
 	if h < minPaneRows {
 		h = minPaneRows
 	}
@@ -779,6 +816,65 @@ func renderID(id string) string {
 	return idHeadStyle.Render(id[:3]) + subtleStyle.Render(id[3:8])
 }
 
+// contentLines builds the styled rows of the content area: main's
+// topics (▶ on its top — the session's current focus — with the
+// horizontal scroll animation applied) or main's empty placeholder,
+// then one labeled section per non-main stack in creation order.
+// Non-main tops get no ▶: their top is just the most recent item, not
+// the current work. Vertical windowing slices this list; the final
+// clipToWidth pass guards row width.
+func (m model) contentLines(mode scrollMode) []string {
+	renderW := m.topicRenderWidth()
+	var lines []string
+	topics := m.mainTopics()
+	extras := m.extraStacks()
+	if len(topics) == 0 {
+		if len(extras) == 0 {
+			lines = append(lines, subtleStyle.Render("(empty — push a topic to get started)"))
+		} else {
+			lines = append(lines, subtleStyle.Render("(main empty)"))
+		}
+	}
+	for i := len(topics) - 1; i >= 0; i-- {
+		runes := []rune(topics[i].Topic)
+		// Over-width topics get trailing-space breathing room so the
+		// scroll lands a couple of columns shy of the right edge.
+		if len(runes) > renderW {
+			runes = append(runes, []rune(strings.Repeat(" ", scrollEndPad))...)
+		}
+		off := 0
+		if mode == scrollHorizontal {
+			off = m.horizontalOffset(i, len(runes))
+		}
+		visible := renderTopicRunes(runes, off, renderW)
+		ctxMark := ""
+		if topics[i].Ref != "" {
+			ctxMark = subtleStyle.Render(" ·")
+		}
+		if i == len(topics)-1 {
+			lines = append(lines, topStyle.Render("▶ "+visible)+ctxMark)
+		} else {
+			lines = append(lines, itemStyle.Render("  "+visible)+ctxMark)
+		}
+	}
+	for _, n := range extras {
+		lines = append(lines, "")
+		if len(n.Topics) == 0 {
+			lines = append(lines, subtleStyle.Render(n.Name+" (empty)"))
+			continue
+		}
+		lines = append(lines, subtleStyle.Render(fmt.Sprintf("%s (%d)", n.Name, len(n.Topics))))
+		for i := len(n.Topics) - 1; i >= 0; i-- {
+			ctxMark := ""
+			if n.Topics[i].Ref != "" {
+				ctxMark = subtleStyle.Render(" ·")
+			}
+			lines = append(lines, itemStyle.Render("  "+n.Topics[i].Topic)+ctxMark)
+		}
+	}
+	return lines
+}
+
 func (m model) View() string {
 	var b strings.Builder
 
@@ -811,19 +907,14 @@ func (m model) View() string {
 		b.WriteString("\n\n")
 	}
 
-	if len(m.topics) == 0 {
-		b.WriteString(subtleStyle.Render("(empty — push a topic to get started)"))
-		// Topic loop writes a trailing \n per item so the blank line
-		// before the footer falls out naturally; the empty branch has
-		// to add one explicitly to keep that blank in the layout.
-		b.WriteString("\n")
-	} else if m.refView {
-		// Ref view: replace the topics list with the top item's
+	if m.refView && len(m.mainTopics()) > 0 {
+		// Ref view: replace the content area with the main top item's
 		// ref. Long refs wrap to the pane width; truncation is
 		// the caller's problem to scroll back to (the panel is meant
 		// for a glance, not a reader). An empty ref renders a
 		// dim placeholder so the user understands why nothing's there.
-		top := m.topics[len(m.topics)-1]
+		topics := m.mainTopics()
+		top := topics[len(topics)-1]
 		header := topStyle.Render("▶ "+top.Topic) + subtleStyle.Render("  · ref")
 		b.WriteString(header + "\n")
 		body := top.Ref
@@ -837,40 +928,24 @@ func (m model) View() string {
 			}
 		}
 	} else {
-		renderW := m.topicRenderWidth()
-
-		// Pick the index range to render. Top-of-stack first.
-		topI := len(m.topics) - 1
-		botI := 0
-		if mode == scrollVertical {
-			topI -= vOff
-			botI = topI - m.contentRows() + 1
-			if botI < 0 {
-				botI = 0
+		lines := m.contentLines(mode)
+		// Vertical windowing over the combined row list. When everything
+		// fits, render it all; otherwise show contentRows() rows starting
+		// at the scroll offset (the "▲ N above" indicator already names
+		// what's hidden).
+		if m.maxVerticalOffset() > 0 {
+			end := vOff + m.contentRows()
+			if end > len(lines) {
+				end = len(lines)
+			}
+			if vOff < len(lines) {
+				lines = lines[vOff:end]
+			} else {
+				lines = nil
 			}
 		}
-
-		for i := topI; i >= botI; i-- {
-			runes := []rune(m.topics[i].Topic)
-			// Over-width topics get trailing-space breathing room so the
-			// scroll lands a couple of columns shy of the right edge.
-			if len(runes) > renderW {
-				runes = append(runes, []rune(strings.Repeat(" ", scrollEndPad))...)
-			}
-			off := 0
-			if mode == scrollHorizontal {
-				off = m.horizontalOffset(i, len(runes))
-			}
-			visible := renderTopicRunes(runes, off, renderW)
-			ctxMark := ""
-			if m.topics[i].Ref != "" {
-				ctxMark = subtleStyle.Render(" ·")
-			}
-			if i == len(m.topics)-1 {
-				b.WriteString(topStyle.Render("▶ "+visible) + ctxMark)
-			} else {
-				b.WriteString(itemStyle.Render("  "+visible) + ctxMark)
-			}
+		for _, line := range lines {
+			b.WriteString(line)
 			b.WriteString("\n")
 		}
 	}

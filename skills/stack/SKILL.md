@@ -12,23 +12,33 @@ stack tui $ARGUMENTS
 
 ## How the stack works
 
-`stack` maintains a per-session **LIFO topic stack** — a visible record of
-what the agent is working on now and what's suspended beneath it.
+`stack` maintains per-session **named LIFO topic stacks** — a visible
+record of what the agent is working on now and what's parked beside it.
 
-- **Push = new focus.** `stack push <topic>` puts a topic on top; the old
-  top stays underneath as suspended work to return to. Starting a nested
-  sub-task means pushing, not replacing.
-- **Pop = closing the loop.** `stack pop` removes the top topic; the
-  next-down item (or empty) becomes the active focus again.
+- **`main` is the focus.** It always exists; commands target it unless
+  `--stack <name>` says otherwise, and its top is the session's current
+  work — the only item that earns the `▶` marker.
+- **Push = new focus.** `stack push <topic>` puts a topic on top of
+  `main`; the old top stays underneath as suspended work to return to.
+  Starting a nested sub-task means pushing, not replacing.
+- **Pop = closing the loop.** `stack pop` removes the top topic and
+  prints a `next:` line naming what you fall back to; the next-down item
+  (or empty) becomes the active focus again.
+- **Named stacks hold parallel threads** — parked ideas, a deferred
+  workstream (`stack push --stack backlog "<topic>"`). They're created
+  on first push, persist when emptied, and are removed only by
+  `stack rm <name>`; `stack stacks` lists names and depths. Their tops
+  are just the most recent item, not the session's focus.
 - **Items may carry a ref** — a short note (blocker, link, resume state)
   attached via `stack ref`, shown inline in the TUI.
 
-Each Claude Code session gets its own stack, resolved from
+Each Claude Code session gets its own stacks, resolved from
 `$CLAUDE_CODE_SESSION_ID` and stored at
 `~/.stack/sessions/<id>/stack.json`. The TUI pane this skill manages is a
-live tmux view of that stack (top-first, `▶` marks the top); it renders
-state but never mutates it. The first `push` of a session auto-spawns the
-pane, and the `/push` and `/pop` skills wrap the corresponding commands.
+live tmux view: the `main` section first (top-first, `▶` marks the top),
+then one titled section per named stack; it renders state but never
+mutates it. The first `push` of a session auto-spawns the pane, and the
+`/push` and `/pop` skills wrap the corresponding commands.
 
 ## CLI behavior
 

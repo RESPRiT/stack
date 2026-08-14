@@ -8,21 +8,29 @@ import (
 // Version is the user-visible release marker. Shown in the TUI header
 // and by `stack --version`. Bumped manually per release; pre-1.0 while
 // the surface is still iterating.
-const Version = "0.1.32"
+const Version = "0.2.0"
 
-const usage = `stack — a topic stack for coding-agent sessions.
+const usage = `stack — topic stacks for coding-agent sessions.
+
+A session holds named stacks. "main" always exists and is the session's
+current focus; commands target it unless --stack says otherwise. Named
+stacks are created on first push and persist when emptied (rm deletes).
 
 Usage:
   stack                    alias for stack ls (default action)
-  stack push <topic>...    push a topic onto the current session's stack
-  stack pop                pop the top topic
-  stack ls [-v]            list the stack, top first; -v also prints each topic's ref
-  stack edit rename <pos> <text>   rename the topic at position (1-based top-first, or top|bottom)
-  stack edit move <from> <to>      reorder a topic; positions as above
-  stack ref <pos>                  print the ref attached to the topic at <pos>
-  stack ref <pos> <text>...        set the ref inline (positional args joined with spaces)
-  stack ref <pos> -                read the ref from stdin
-  stack ref <pos> --clear          remove the ref (item reverts to a bare string on disk)
+  stack push [--stack <name>] <topic>...   push a topic (named stacks created on first push)
+  stack pop [--stack <name>]               pop the top topic
+  stack ls [-v] [--stack <name> | --all]   list one stack (default main) or every stack;
+                                           -v also prints each topic's ref
+  stack stacks             list the session's stack names and depths
+  stack rm <name>          delete a stack ("main" is undeletable)
+  stack edit rename [--stack <name>] <pos> <text>   rename the topic at position
+                                           (1-based top-first, or top|bottom)
+  stack edit move [--stack <name>] <from> <to>      reorder a topic; positions as above
+  stack ref [--stack <name>] <pos>         print the ref attached to the topic at <pos>
+  stack ref [--stack <name>] <pos> <text>...  set the ref inline (args joined with spaces)
+  stack ref [--stack <name>] <pos> -          read the ref from stdin
+  stack ref [--stack <name>] <pos> --clear    remove the ref
   stack tui                live TUI view; inside an @stack-tui pane runs the foreground
                            process, outside it auto-spawns one (= stack tui open)
   stack tui open           spawn the @stack-tui pane (idempotent — no-op if one exists)
@@ -57,6 +65,10 @@ func main() {
 		err = cmdPop(args)
 	case "ls", "list":
 		err = cmdLs(args)
+	case "stacks":
+		err = cmdStacks(args)
+	case "rm":
+		err = cmdRm(args)
 	case "edit":
 		err = cmdEdit(args)
 	case "tui":
