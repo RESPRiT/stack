@@ -7,8 +7,13 @@ argument-hint: <topic>
 Run the following command via the Bash tool, then relay its stdout verbatim to the user.
 
 ```
-stack push "$ARGUMENTS"
+stack push "$ARGUMENTS" && stack focus
 ```
+
+The `stack focus` half prints the context-switch header for the new top — see
+**The context-switch header** below for what to do with it. Drop it from the
+command when pushing to a named stack (`--stack backlog`): that doesn't move
+the focus, so there's no switch to announce.
 
 You may re-phrase `$ARGUMENTS` before passing it to `stack push` when the original is verbose, ambiguous, or imprecise — the TUI shows the topic, so a concise, well-scoped phrasing is more useful than a sprawling one. Preserve the meaning; do not change scope.
 
@@ -16,13 +21,38 @@ You may re-phrase `$ARGUMENTS` before passing it to `stack push` when the origin
 
 If the original is already in that range, unambiguous, and action-oriented, pass it through verbatim. When you do re-phrase, briefly note what you changed in your reply so the user can correct you if you drifted.
 
-Then update your own working model: the topic you just pushed is now the active focus. When you finish it, call `/pop`. If the user asks "what are you working on?", read the top of the stack rather than guessing.
+Then update your own working model: the topic you just pushed is now the active focus. When you finish it, call `/pop`. If the user asks "what are you working on?", run `stack focus` and answer from its header rather than guessing.
 
 The stack is LIFO: pushing suspends the old top beneath the new topic; popping resumes it. See the `/stack` skill for the full model.
 
 To record something that is *not* the current focus — a parked idea, a someday task — push it to a named stack instead of `main`: `stack push --stack backlog "<topic>"`. Named stacks are created on their first push and don't disturb the `▶` focus. Reserve plain `/push` for work you're actually starting.
 
 If the command fails (no `stack` binary on PATH, etc.), tell the user what went wrong and stop.
+
+## The context-switch header
+
+`stack focus` prints a markdown header naming whatever now sits on top — a
+rule, a `[main · depth N]` counter, the topic in bold, and its ref if it
+carries one:
+
+```
+`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+`                                            [main · depth 2]`
+`▶` **Refactor the session resolver**
+```
+
+Echo it verbatim, as the first thing in your reply. **Never draw the rule
+yourself.** Its width is measured from the live tmux pane, and a hand-built one
+comes out the wrong length often enough that the header stops reading as a
+landmark — which is the only thing it is for.
+
+Underneath it, write two or three sentences of orientation: what this topic
+covers, why it's worth its own frame, and what you're doing first. A freshly
+pushed topic has no ref, so this prose is the only context the reader gets —
+say what "done" looks like.
+
+Print the header once, in the turn the switch happens. Later turns on the same
+topic get no header; a rule that appears every turn marks nothing.
 
 ## When the agent should self-invoke
 

@@ -8,7 +8,7 @@ import (
 // Version is the user-visible release marker. Shown in the TUI header
 // and by `stack --version`. Bumped manually per release; pre-1.0 while
 // the surface is still iterating.
-const Version = "0.2.1"
+const Version = "0.2.2"
 
 const usage = `stack — topic stacks for coding-agent sessions.
 
@@ -22,6 +22,9 @@ Usage:
   stack pop [--stack <name>]               pop the top topic
   stack ls [-v] [--stack <name> | --all]   list one stack (default main) or every stack;
                                            -v also prints each topic's ref
+  stack focus [--stack <name>]             print the markdown context-switch header
+                                           naming the stack's current top; read-only,
+                                           meant to be chained after push/pop/mv
   stack stacks             list the session's stack names and depths
   stack rm <name>          delete a stack ("main" is undeletable)
   stack mv [<pos>] [--from <name>] [--to <name>]   move the item at <pos> (default top)
@@ -66,6 +69,8 @@ func main() {
 		err = cmdPush(args)
 	case "pop":
 		err = cmdPop(args)
+	case "focus":
+		err = cmdFocus(args)
 	case "ls", "list":
 		err = cmdLs(args)
 	case "stacks":
