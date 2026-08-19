@@ -8,7 +8,7 @@ import (
 // Version is the user-visible release marker. Shown in the TUI header
 // and by `stack --version`. Bumped manually per release; pre-1.0 while
 // the surface is still iterating.
-const Version = "0.2.2"
+const Version = "0.2.3"
 
 const usage = `stack — topic stacks for coding-agent sessions.
 
@@ -41,7 +41,8 @@ Usage:
                            process, outside it auto-spawns one (= stack tui open)
   stack tui open           spawn the @stack-tui pane (idempotent — no-op if one exists)
   stack tui close          dismiss any open TUI pane(s) for this session
-  stack tui reflow         reposition the TUI pane for the current terminal size
+  stack tui reflow [<window>] [--all]   reflow the TUI pane for its window's dims
+                           (default: this window; --all: every window with a pane)
   stack hmr [on|off|status]   toggle hot-reload of the TUI on .go changes (no arg = toggle)
   stack version            print the version
   stack help               show this help

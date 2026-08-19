@@ -60,3 +60,96 @@ func TestRightWidthFor(t *testing.T) {
 		}
 	}
 }
+
+func TestParseHookState(t *testing.T) {
+	const bin = "/Users/h/go/bin/stack"
+	cases := []struct {
+		name      string
+		out       string
+		installed bool
+		dupes     []string
+		stale     []string
+	}{
+		{
+			name: "fresh server",
+			out:  "",
+		},
+		{
+			name:      "installed, nothing stale",
+			out:       `window-resized[0] run-shell "/Users/h/go/bin/stack tui reflow #{window_id}"` + "\n",
+			installed: true,
+		},
+		{
+			name:  "legacy client-resized in both historical forms",
+			out:   "client-resized[0] run-shell \"/Users/h/go/bin/stack reflow\"\nclient-resized[1] run-shell \"/Users/h/go/bin/stack tui reflow\"\n",
+			stale: []string{"client-resized[0]", "client-resized[1]"},
+		},
+		{
+			name:      "installed alongside a legacy hook",
+			out:       "client-resized[2] run-shell \"/Users/h/go/bin/stack tui reflow\"\nwindow-resized[0] run-shell \"/Users/h/go/bin/stack tui reflow #{window_id}\"\n",
+			installed: true,
+			stale:     []string{"client-resized[2]"},
+		},
+		{
+			name:      "duplicate installs collapse to the first slot",
+			out:       "window-resized[0] run-shell \"/Users/h/go/bin/stack tui reflow #{window_id}\"\nwindow-resized[1] run-shell \"/Users/h/go/bin/stack tui reflow #{window_id}\"\nwindow-resized[2] run-shell \"/Users/h/go/bin/stack tui reflow #{window_id}\"\n",
+			installed: true,
+			dupes:     []string{"window-resized[1]", "window-resized[2]"},
+		},
+		{
+			name: "someone else's hooks are left alone",
+			out:  "client-resized[0] run-shell \"/opt/other/stack reflow\"\nwindow-resized[0] refresh-client\nwindow-resized[1] run-shell \"/opt/other/stack tui reflow\"\n",
+		},
+	}
+	for _, c := range cases {
+		st := parseHookState(c.out, bin)
+		if st.installed != c.installed {
+			t.Errorf("%s: installed = %v, want %v", c.name, st.installed, c.installed)
+		}
+		if !equalStrings(st.stale, c.stale) {
+			t.Errorf("%s: stale = %v, want %v", c.name, st.stale, c.stale)
+		}
+		if !equalStrings(st.dupes, c.dupes) {
+			t.Errorf("%s: dupes = %v, want %v", c.name, st.dupes, c.dupes)
+		}
+	}
+}
+
+func TestReflowHookCommand(t *testing.T) {
+	got := reflowHookCommand("/Users/h/go/bin/stack")
+	want := `run-shell '/Users/h/go/bin/stack tui reflow #{window_id}'`
+	if got != want {
+		t.Errorf("reflowHookCommand = %q, want %q", got, want)
+	}
+	// The installed command must round-trip through parseHookState's
+	// detection once tmux re-prints it double-quoted.
+	st := parseHookState("window-resized[0] run-shell \"/Users/h/go/bin/stack tui reflow #{window_id}\"\n", "/Users/h/go/bin/stack")
+	if !st.installed {
+		t.Errorf("installed hook not detected by parseHookState")
+	}
+}
+
+func TestReflowStateName(t *testing.T) {
+	cases := map[[2]string]string{
+		{"@12", "lock"}:    "reflow-12.lock",
+		{"@0", "trailing"}: "reflow-0.trailing",
+		{"7", "lock"}:      "reflow-7.lock",
+	}
+	for in, want := range cases {
+		if got := reflowStateName(in[0], in[1]); got != want {
+			t.Errorf("reflowStateName(%q, %q) = %q, want %q", in[0], in[1], got, want)
+		}
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

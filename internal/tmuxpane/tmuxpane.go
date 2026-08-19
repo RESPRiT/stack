@@ -1,6 +1,6 @@
 // Package tmuxpane auto-spawns a `stack tui` pane in the current tmux
-// window when one isn't already running, and can reflow that pane to a
-// different split direction when the terminal is resized.
+// window when one isn't already running, and reflows that pane —
+// placement and width — whenever tmux resizes its window.
 //
 // All operations are best-effort: if tmux isn't installed, $TMUX isn't
 // set, or any tmux command fails, the caller's primary action (push) is
@@ -119,12 +119,24 @@ func decide(cols, rows int) placement {
 	return placementTop
 }
 
-// EnsureResizeHook installs a global client-resized tmux hook that
-// runs `stack tui reflow` when the terminal size changes, if no such
-// hook is already present. Safe to call repeatedly: detection is by
-// substring match for "<bin> tui reflow" in the hook list, so we
-// won't double-install. Also unsets any legacy `<bin> reflow` hooks
-// left over from a previous version. Outside tmux this is a no-op.
+// EnsureResizeHook installs a global window-resized tmux hook that runs
+// `<bin> tui reflow <window_id>` whenever tmux applies a size change to
+// a window: a live client resize of the current window, the deferred
+// resize of a background window when it becomes current, or an
+// attach-time resize. window-resized is the one event that fires per
+// window, after the layout is updated, for every one of those paths —
+// so reflow always reads the window's true dims and never skips a
+// window it couldn't see.
+//
+// Safe to call repeatedly: detection is by substring match for
+// "<bin> tui reflow" among the window-resized hooks, and any extra
+// copies of that hook (window-resized is window-scoped, so it lives in
+// `show-hooks -gw`; a lookup in the wrong scope would append a copy per
+// TUI start) are unset so exactly one remains. Any client-resized hook
+// referencing this binary is unset too: that hook fires once per
+// client, before the current window's layout is updated and never for
+// background windows, so left in place it would only add a second,
+// mistimed reflow. Outside tmux this is a no-op.
 func EnsureResizeHook() error {
 	if !inTmux() {
 		return nil
@@ -133,36 +145,74 @@ func EnsureResizeHook() error {
 	if err != nil {
 		return err
 	}
+	// client-resized is a session hook (-g); window-resized is a window
+	// hook (-gw). Concatenate both listings — hook names disambiguate.
+	sessionHooks, err := exec.Command("tmux", "show-hooks", "-g").Output()
+	if err != nil {
+		return fmt.Errorf("show-hooks -g: %w", err)
+	}
+	windowHooks, err := exec.Command("tmux", "show-hooks", "-gw").Output()
+	if err != nil {
+		return fmt.Errorf("show-hooks -gw: %w", err)
+	}
+	state := parseHookState(string(sessionHooks)+string(windowHooks), bin)
+	for _, h := range state.stale {
+		_ = exec.Command("tmux", "set-hook", "-gu", h).Run()
+	}
+	for _, h := range state.dupes {
+		_ = exec.Command("tmux", "set-hook", "-gwu", h).Run()
+	}
+	if state.installed {
+		return nil
+	}
+	return exec.Command("tmux", "set-hook", "-gwa", "window-resized", reflowHookCommand(bin)).Run()
+}
+
+// reflowHookCommand is the tmux command stored under window-resized.
+// run-shell expands formats against the hook's target, so #{window_id}
+// names the window whose size just changed. Single-quoted for tmux's
+// parser so nothing in the binary path is expanded at parse time.
+func reflowHookCommand(bin string) string {
+	return "run-shell " + shellQuote(bin+" tui reflow #{window_id}")
+}
+
+// hookState is what parseHookState reads out of `tmux show-hooks`.
+type hookState struct {
+	installed bool     // a window-resized hook already runs "<bin> tui reflow"
+	dupes     []string // further window-resized slots running it, e.g. "window-resized[1]"
+	stale     []string // client-resized slots referencing bin, e.g. "client-resized[0]"
+}
+
+// parseHookState scans show-hooks output (session and window scope
+// concatenated) for this binary's reflow hooks. A client-resized line
+// counts as stale if it references "<bin> reflow" in either form
+// ("<bin> reflow" or "<bin> tui reflow").
+func parseHookState(showHooks, bin string) hookState {
 	marker := bin + " tui reflow"
 	legacyMarker := bin + " reflow"
-
-	out, err := exec.Command("tmux", "show-hooks", "-g").Output()
-	if err != nil {
-		return fmt.Errorf("show-hooks: %w", err)
-	}
-	already := false
-	for _, line := range strings.Split(string(out), "\n") {
-		if !strings.Contains(line, "client-resized") {
-			continue
-		}
-		if strings.Contains(line, marker) {
-			already = true
-			continue
-		}
-		// Detect legacy "<bin> reflow" hooks (without " tui "
-		// in the path) and unset them so we don't fire a stale
-		// subcommand on every resize.
-		if strings.Contains(line, legacyMarker) && !strings.Contains(line, marker) {
-			if idx := parseHookIndex(line); idx != "" {
-				_ = exec.Command("tmux", "set-hook", "-gu", "client-resized"+idx).Run()
+	var st hookState
+	for _, line := range strings.Split(showHooks, "\n") {
+		switch {
+		case strings.HasPrefix(line, "window-resized"):
+			if !strings.Contains(line, marker) {
+				continue
+			}
+			if st.installed {
+				if idx := parseHookIndex(line); idx != "" {
+					st.dupes = append(st.dupes, "window-resized"+idx)
+				}
+				continue
+			}
+			st.installed = true
+		case strings.HasPrefix(line, "client-resized"):
+			if strings.Contains(line, marker) || strings.Contains(line, legacyMarker) {
+				if idx := parseHookIndex(line); idx != "" {
+					st.stale = append(st.stale, "client-resized"+idx)
+				}
 			}
 		}
 	}
-	if already {
-		return nil
-	}
-	hookCmd := "run-shell " + shellQuote(marker)
-	return exec.Command("tmux", "set-hook", "-ga", "client-resized", hookCmd).Run()
+	return st
 }
 
 // parseHookIndex returns the "[N]" suffix from a `tmux show-hooks`
@@ -211,39 +261,53 @@ func EnsureRunning(sessionID string) error {
 	return err
 }
 
-// Reflow scans every window in the current tmux session for a pane
-// marked @stack-tui. For each, it decides the desired placement from
-// the largest non-TUI pane in that window; if the current placement
-// differs, it kills the TUI pane and respawns it in the new position.
+// Reflow repositions and resizes the @stack-tui pane in windowID (a
+// tmux window id such as "@12") for that window's current dimensions.
+// It is the body of the window-resized hook, so it runs once per applied
+// resize of exactly the window that changed; `stack tui reflow` also
+// runs it by hand. Windows without a TUI pane return immediately.
 //
-// Coalescing splits the work into a fast leading path and a settled
-// trailing path so drag-resizing stays smooth:
+// Placement and width are both pure functions of the window's dims
+// (decide, rightWidthFor). Coalescing splits the work into a fast
+// leading path and a settled trailing path so drag-resizing stays
+// smooth:
 //
 //   - Leading and every tick during a drag: reflowOnce handles
 //     placement changes only — cheap, no tmux resize-pane calls when
 //     placement is stable. tmux's own auto-scaling tracks the drag.
 //   - On the first quiet 60 ms window after events stop arriving:
-//     enforceCanonicalSize fires once and snaps right panes to their
+//     enforceCanonicalSize fires once and snaps a right pane to its
 //     canonical width. Single resize-pane per drag end, no jitter.
-func Reflow() error {
+//
+// The lock and trailing flag are keyed by window, so concurrent hooks
+// for different windows — one terminal resize touches every attached
+// client's current window at once — never starve each other.
+func Reflow(windowID string) error {
 	if !inTmux() {
 		return nil
 	}
-	acquired, err := acquireReflowLock()
+	tuis, err := findTUIPanesInWindow(windowID)
+	if err != nil {
+		return err
+	}
+	if len(tuis) == 0 {
+		return nil
+	}
+	acquired, err := acquireReflowLock(windowID)
 	if err != nil {
 		return err
 	}
 	if !acquired {
-		return raiseTrailing()
+		return raiseTrailing(windowID)
 	}
-	defer releaseReflowLock()
+	defer releaseReflowLock(windowID)
 
-	if err := reflowOnce(); err != nil {
+	if err := reflowOnce(windowID); err != nil {
 		return err
 	}
 	for {
 		time.Sleep(reflowWindow)
-		pending, err := consumeTrailing()
+		pending, err := consumeTrailing(windowID)
 		if err != nil {
 			return err
 		}
@@ -252,15 +316,63 @@ func Reflow() error {
 		}
 		// More events landed during sleep — still mid-drag. Handle any
 		// placement change but defer size enforcement.
-		if err := reflowOnce(); err != nil {
+		if err := reflowOnce(windowID); err != nil {
 			return err
 		}
 	}
-	return enforceCanonicalSize()
+	return enforceCanonicalSize(windowID)
 }
 
-func reflowOnce() error {
-	tuis, err := findTUIPanes()
+// ReflowAll runs Reflow for every window on the tmux server that holds
+// an @stack-tui pane. Manual recovery path (`stack tui reflow --all`);
+// the hook never needs it. Returns the number of windows reflowed.
+func ReflowAll() (int, error) {
+	if !inTmux() {
+		return 0, nil
+	}
+	tuis, err := findTUIPanesScoped(true)
+	if err != nil {
+		return 0, err
+	}
+	seen := map[string]bool{}
+	for _, tui := range tuis {
+		if seen[tui.windowID] {
+			continue
+		}
+		seen[tui.windowID] = true
+		if err := Reflow(tui.windowID); err != nil {
+			return len(seen) - 1, err
+		}
+	}
+	return len(seen), nil
+}
+
+// ResolveWindowID turns any tmux window target (a window id, an index,
+// a session:window spec) into its canonical "@N" id. With an empty
+// target it resolves the caller's own window — $TMUX_PANE when set,
+// otherwise tmux's notion of the current window.
+func ResolveWindowID(target string) (string, error) {
+	if target == "" {
+		target = os.Getenv("TMUX_PANE")
+	}
+	args := []string{"display-message", "-p"}
+	if target != "" {
+		args = append(args, "-t", target)
+	}
+	args = append(args, "#{window_id}")
+	out, err := exec.Command("tmux", args...).Output()
+	if err != nil {
+		return "", fmt.Errorf("display-message window: %w", err)
+	}
+	id := strings.TrimSpace(string(out))
+	if id == "" {
+		return "", fmt.Errorf("no tmux window for target %q", target)
+	}
+	return id, nil
+}
+
+func reflowOnce(windowID string) error {
+	tuis, err := findTUIPanesInWindow(windowID)
 	if err != nil {
 		return err
 	}
@@ -268,19 +380,17 @@ func reflowOnce() error {
 	if err != nil {
 		return err
 	}
+	// Decide from the window dims, not the main pane's dims. The main
+	// pane's aspect ratio depends on where the TUI currently sits (a
+	// top-split shrinks rows; a right-split shrinks cols), so using it
+	// would flap the placement back and forth on every resize.
+	winCols, winRows, err := windowDims(windowID)
+	if err != nil {
+		return err
+	}
+	desired := decide(winCols, winRows)
 	for _, tui := range tuis {
-		// Decide from the window dims, not the main pane's dims. The
-		// main pane's aspect ratio depends on where the TUI currently
-		// sits (a top-split shrinks rows; a right-split shrinks cols),
-		// so using it would flap the placement back and forth on every
-		// resize.
-		winCols, winRows, err := windowDims(tui.windowID)
-		if err != nil {
-			continue
-		}
-		cur := currentPlacement(tui)
-		desired := decide(winCols, winRows)
-		if cur == desired {
+		if currentPlacement(tui) == desired {
 			continue
 		}
 		if tui.sessionID == "" {
@@ -288,7 +398,7 @@ func reflowOnce() error {
 		}
 		// findMainPane is still the right *target* for the new split,
 		// even though it's no longer the source of dimensions.
-		main, err := findMainPane(tui.windowID, tui.id)
+		main, err := findMainPane(windowID, tui.id)
 		if err != nil || main == nil {
 			continue
 		}
@@ -300,28 +410,25 @@ func reflowOnce() error {
 	return nil
 }
 
-// enforceCanonicalSize snaps right-placed @stack-tui panes to
-// rightWidthFor(winCols). Invoked by Reflow only after events settle,
-// so a drag-resize doesn't trigger a tmux resize-pane on every tick —
-// the user sees tmux's own auto-scaling track the drag smoothly, and
-// the canonical width snap fires once at the end. Top panes are
+// enforceCanonicalSize snaps a right-placed @stack-tui pane in windowID
+// to rightWidthFor(winCols). Invoked by Reflow only after events
+// settle, so a drag-resize doesn't trigger a tmux resize-pane on every
+// tick — the user sees tmux's own auto-scaling track the drag smoothly,
+// and the canonical width snap fires once at the end. Top panes are
 // left alone (their height is stack-driven by maybeResize inside the
 // TUI process).
-func enforceCanonicalSize() error {
-	tuis, err := findTUIPanes()
+func enforceCanonicalSize(windowID string) error {
+	tuis, err := findTUIPanesInWindow(windowID)
 	if err != nil {
 		return err
 	}
+	winCols, _, err := windowDims(windowID)
+	if err != nil {
+		return err
+	}
+	target := rightWidthFor(winCols)
 	for _, tui := range tuis {
-		if currentPlacement(tui) != placementRight {
-			continue
-		}
-		winCols, _, err := windowDims(tui.windowID)
-		if err != nil {
-			continue
-		}
-		target := rightWidthFor(winCols)
-		if tui.cols == target {
+		if currentPlacement(tui) != placementRight || tui.cols == target {
 			continue
 		}
 		_ = exec.Command("tmux", "resize-pane", "-t", tui.id, "-x", strconv.Itoa(target)).Run()
@@ -522,20 +629,7 @@ func CloseInCurrentWindow() (int, error) {
 
 // currentWindowID returns the tmux window id containing the caller's
 // pane (preferring $TMUX_PANE, falling back to the active pane).
-// Returns "" if no window can be resolved — callers should treat that
-// as "no scoping" rather than an error.
-func currentWindowID() (string, error) {
-	args := []string{"display-message", "-p"}
-	if target := os.Getenv("TMUX_PANE"); target != "" {
-		args = append(args, "-t", target)
-	}
-	args = append(args, "#{window_id}")
-	out, err := exec.Command("tmux", args...).Output()
-	if err != nil {
-		return "", fmt.Errorf("display-message window: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
-}
+func currentWindowID() (string, error) { return ResolveWindowID("") }
 
 // RetargetForSession retargets any @stack-tui pane in the current tmux
 // session whose @stack-session differs from newSessionID: the old pane
@@ -637,14 +731,26 @@ func findTUIPanes() ([]paneInfo, error) {
 // session (allSessions=false) or across every session on the server
 // (allSessions=true).
 func findTUIPanesScoped(allSessions bool) ([]paneInfo, error) {
-	scope := "-s" // current session only
 	if allSessions {
-		scope = "-a" // every session on this tmux server
+		return listTUIPanes("-a") // every session on this tmux server
 	}
-	out, err := exec.Command("tmux", "list-panes", scope, "-F",
-		"#{pane_id} #{window_id} #{pane_width} #{pane_height} #{@stack-tui} #{@stack-session} #{@stack-placement}").Output()
+	return listTUIPanes("-s") // current session only
+}
+
+// findTUIPanesInWindow lists the @stack-tui panes in one window.
+func findTUIPanesInWindow(windowID string) ([]paneInfo, error) {
+	return listTUIPanes("-t", windowID)
+}
+
+// listTUIPanes runs `tmux list-panes <scope...>` and keeps the panes
+// whose @stack-tui option is set.
+func listTUIPanes(scope ...string) ([]paneInfo, error) {
+	args := append([]string{"list-panes"}, scope...)
+	args = append(args, "-F",
+		"#{pane_id} #{window_id} #{pane_width} #{pane_height} #{@stack-tui} #{@stack-session} #{@stack-placement}")
+	out, err := exec.Command("tmux", args...).Output()
 	if err != nil {
-		return nil, fmt.Errorf("list-panes -s: %w", err)
+		return nil, fmt.Errorf("list-panes %s: %w", strings.Join(scope, " "), err)
 	}
 	var panes []paneInfo
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -721,12 +827,19 @@ func currentPlacement(tui paneInfo) placement {
 	return placementRight
 }
 
-// acquireReflowLock attempts to create ~/.stack/reflow.lock exclusively.
-// Returns acquired=true if we got it. If a previous holder crashed and
-// the lock is older than lockStale, we forcibly reclaim it so the system
-// doesn't get stuck.
-func acquireReflowLock() (bool, error) {
-	path, err := stateFile("reflow.lock")
+// reflowStateName is the ~/.stack file name for one window's reflow
+// lock or trailing flag: "reflow-12.lock" for window "@12". Keyed per
+// window so concurrent reflows of different windows don't contend.
+func reflowStateName(windowID, kind string) string {
+	return "reflow-" + strings.TrimPrefix(windowID, "@") + "." + kind
+}
+
+// acquireReflowLock attempts to create the window's lock file
+// exclusively. Returns acquired=true if we got it. If a previous holder
+// crashed and the lock is older than lockStale, we forcibly reclaim it
+// so the window doesn't get stuck.
+func acquireReflowLock(windowID string) (bool, error) {
+	path, err := stateFile(reflowStateName(windowID, "lock"))
 	if err != nil {
 		return false, err
 	}
@@ -753,17 +866,17 @@ func acquireReflowLock() (bool, error) {
 	return false, nil
 }
 
-func releaseReflowLock() {
-	if path, err := stateFile("reflow.lock"); err == nil {
+func releaseReflowLock(windowID string) {
+	if path, err := stateFile(reflowStateName(windowID, "lock")); err == nil {
 		_ = os.Remove(path)
 	}
 }
 
-// raiseTrailing marks that a reflow arrived while a leading call held
-// the lock. The leading call will check this just before releasing and,
-// if set, fire one more reflow.
-func raiseTrailing() error {
-	path, err := stateFile("reflow.trailing")
+// raiseTrailing marks that a reflow for this window arrived while a
+// leading call held its lock. The leading call checks this just before
+// releasing and, if set, fires one more reflow.
+func raiseTrailing(windowID string) error {
+	path, err := stateFile(reflowStateName(windowID, "trailing"))
 	if err != nil {
 		return err
 	}
@@ -774,8 +887,8 @@ func raiseTrailing() error {
 	return f.Close()
 }
 
-func consumeTrailing() (bool, error) {
-	path, err := stateFile("reflow.trailing")
+func consumeTrailing(windowID string) (bool, error) {
+	path, err := stateFile(reflowStateName(windowID, "trailing"))
 	if err != nil {
 		return false, err
 	}

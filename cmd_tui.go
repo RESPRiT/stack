@@ -70,7 +70,7 @@ const (
 //
 //   - `stack tui open`    spawn the pane (no-op if one already exists).
 //   - `stack tui close`   dismiss any pane in the current tmux session.
-//   - `stack tui reflow`  reposition the pane for the current terminal size.
+//   - `stack tui reflow`  reposition/resize the pane for its window's dims.
 //
 // `stack tui` (no sub) auto-detects: if invoked inside an @stack-tui
 // pane (or outside tmux entirely), it runs the foreground Bubble Tea
@@ -139,9 +139,10 @@ func runForegroundTUI(args []string) error {
 		return err
 	}
 
-	// Best-effort: register the client-resized hook so this pane (and any
-	// future ones in this tmux server) repositions itself on resize. A
-	// missing hook just means no auto-reflow; the TUI still works.
+	// Best-effort: register the window-resized hook so this pane (and any
+	// future ones in this tmux server) repositions and resizes itself
+	// whenever tmux resizes its window. A missing hook just means no
+	// auto-reflow; the TUI still works.
 	_ = tmuxpane.EnsureResizeHook()
 
 	events := make(chan tea.Msg, eventBuf)
