@@ -153,3 +153,14 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+func TestCallerTarget(t *testing.T) {
+	t.Setenv("TMUX_PANE", "%7")
+	if got := callerTarget(); len(got) != 2 || got[0] != "-t" || got[1] != "%7" {
+		t.Errorf("callerTarget with TMUX_PANE=%%7 = %v, want [-t %%7]", got)
+	}
+	t.Setenv("TMUX_PANE", "")
+	if got := callerTarget(); got != nil {
+		t.Errorf("callerTarget without TMUX_PANE = %v, want nil", got)
+	}
+}

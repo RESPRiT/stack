@@ -228,10 +228,13 @@ func parseHookIndex(line string) string {
 
 // EnsureRunning spawns a TUI pane for sessionID if and only if:
 //  1. we're inside tmux ($TMUX is set), AND
-//  2. no pane in the current window already has @stack-tui set.
+//  2. no pane in the caller's window already has @stack-tui set.
 //
-// The split target is the largest non-TUI pane in the active window —
-// not necessarily the active pane. Splitting from a small active pane
+// "The caller's window" is the one holding $TMUX_PANE (see
+// callerTarget), so a push from a pane in a background window spawns
+// the TUI there, not in whichever window happens to be in front. The
+// split target is the largest non-TUI pane in that window — not
+// necessarily the active pane. Splitting from a small active pane
 // could land the new TUI at a clamped width, breaking the
 // dims-determines-size guarantee.
 func EnsureRunning(sessionID string) error {
@@ -349,15 +352,13 @@ func ReflowAll() (int, error) {
 
 // ResolveWindowID turns any tmux window target (a window id, an index,
 // a session:window spec) into its canonical "@N" id. With an empty
-// target it resolves the caller's own window — $TMUX_PANE when set,
-// otherwise tmux's notion of the current window.
+// target it resolves the caller's own window (see callerTarget).
 func ResolveWindowID(target string) (string, error) {
-	if target == "" {
-		target = os.Getenv("TMUX_PANE")
-	}
 	args := []string{"display-message", "-p"}
 	if target != "" {
 		args = append(args, "-t", target)
+	} else {
+		args = append(args, callerTarget()...)
 	}
 	args = append(args, "#{window_id}")
 	out, err := exec.Command("tmux", args...).Output()
@@ -493,7 +494,7 @@ func inTmux() bool {
 
 // TUIPaneExists is the exported form of tuiPaneExists for callers
 // outside this package that want to ask "is there already a TUI pane
-// in the current window?" without spawning one.
+// in the caller's window?" without spawning one.
 func TUIPaneExists() (bool, error) { return tuiPaneExists() }
 
 // IsTUIPane reports whether the given pane has @stack-tui set. Used
@@ -679,8 +680,30 @@ func RetargetForSession(newSessionID string) (int, error) {
 	return retargeted, nil
 }
 
+// callerTarget returns the tmux -t arguments that scope a query to the
+// caller's own pane: $TMUX_PANE, which tmux sets in every pane's
+// environment. Without it (a run-shell job, a scrubbed environment)
+// there is no way to name the caller's pane and the query runs
+// target-less.
+//
+// The scoping matters because of how tmux resolves a target-less
+// command from an unattached client: it uses the pane the command runs
+// in only to pick the session, then answers for that session's
+// *current* window and active pane. A target-less query from a pane in
+// a background window therefore describes the foreground window.
+func callerTarget() []string {
+	if pane := os.Getenv("TMUX_PANE"); pane != "" {
+		return []string{"-t", pane}
+	}
+	return nil
+}
+
+// tuiPaneExists reports whether the caller's window already holds an
+// @stack-tui pane. `list-panes -t <pane>` lists that pane's window.
 func tuiPaneExists() (bool, error) {
-	out, err := exec.Command("tmux", "list-panes", "-F", "#{@stack-tui}").Output()
+	args := append([]string{"list-panes"}, callerTarget()...)
+	args = append(args, "-F", "#{@stack-tui}")
+	out, err := exec.Command("tmux", args...).Output()
 	if err != nil {
 		return false, fmt.Errorf("list-panes: %w", err)
 	}
@@ -692,8 +715,11 @@ func tuiPaneExists() (bool, error) {
 	return false, nil
 }
 
+// currentPaneInfo describes the caller's own pane (see callerTarget).
 func currentPaneInfo() (paneInfo, error) {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{pane_id} #{window_id} #{pane_width} #{pane_height}").Output()
+	args := append([]string{"display-message", "-p"}, callerTarget()...)
+	args = append(args, "#{pane_id} #{window_id} #{pane_width} #{pane_height}")
+	out, err := exec.Command("tmux", args...).Output()
 	if err != nil {
 		return paneInfo{}, fmt.Errorf("display-message: %w", err)
 	}
