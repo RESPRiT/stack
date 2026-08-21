@@ -212,3 +212,19 @@ func TestItemJSON_RejectsGarbage(t *testing.T) {
 		t.Error("expected error on numeric input, got nil")
 	}
 }
+
+func TestTotalDepth(t *testing.T) {
+	var empty Stack
+	empty.normalize()
+	if got := empty.TotalDepth(); got != 0 {
+		t.Errorf("empty TotalDepth = %d, want 0", got)
+	}
+	s := Stack{Stacks: []Named{
+		{Name: Main, Topics: []Item{{Topic: "a"}, {Topic: "b"}}},
+		{Name: "backlog", Topics: []Item{}},
+		{Name: "later", Topics: []Item{{Topic: "c"}}},
+	}}
+	if got := s.TotalDepth(); got != 3 {
+		t.Errorf("TotalDepth = %d, want 3", got)
+	}
+}

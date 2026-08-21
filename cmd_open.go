@@ -9,6 +9,10 @@ import (
 	"stack/internal/tmuxpane"
 )
 
+// cmdOpen implements `stack tui open [--session <id>]`: spawn the
+// @stack-tui pane for the session, idempotently. Callers that want a
+// conditional open (e.g. only when there is something to show) compose
+// it with `stack depth`.
 func cmdOpen(args []string) error {
 	fs := flag.NewFlagSet("open", flag.ContinueOnError)
 	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")

@@ -140,6 +140,16 @@ func (s Stack) Depth(name string) int {
 	return len(topics)
 }
 
+// TotalDepth returns the topic count summed over every stack — zero
+// means the session has nothing on any stack.
+func (s Stack) TotalDepth() int {
+	n := 0
+	for _, st := range s.Stacks {
+		n += len(st.Topics)
+	}
+	return n
+}
+
 // Names returns the stack names in display order: Main first, then
 // creation order.
 func (s Stack) Names() []string {

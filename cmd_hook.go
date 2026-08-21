@@ -48,9 +48,10 @@ func cmdHook(args []string) error {
 //     windows.
 //   - source=resume → retarget the panel to the resumed session id so it
 //     shows the right stack. Also scoped to the firing pane's window.
-//   - source=startup|compact → no-op. Startup is handled by `stack open`
-//     (user-driven), and compact preserves the session so the panel is
-//     already correct.
+//   - source=startup|compact → no-op. Whether a starting session gets a
+//     panel is the user's policy, expressed in their own SessionStart
+//     hook by composing `stack depth --total` with `stack tui open`;
+//     compact preserves the session so the panel is already correct.
 //
 // All branches are best-effort and silent on stdout — SessionStart hook
 // output is injected as context, and the panel side-effects don't need
