@@ -1,1 +1,3 @@
 /bin/
+# Symlink to the local sesh wiki; machine-specific.
+/wiki
