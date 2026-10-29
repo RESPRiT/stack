@@ -978,5 +978,26 @@ func (m model) View() string {
 	for i, line := range lines {
 		lines[i] = clipToWidth(line, m.width)
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(padToHeight(lines, m.height), "\n")
+}
+
+// padToHeight extends lines with empty rows until the frame is exactly
+// rows tall, so every frame paints the whole pane. Bubble Tea's renderer
+// only touches rows the frame contains and never clears below them, so
+// any row the frame omits keeps whatever the terminal last put there.
+//
+// That matters under tmux, which shrinks a pane's cell grid immediately
+// but delivers the matching SIGWINCH at most once per 250 ms — and, when
+// resizes bounce (drag + reflow snap), can report a width larger than
+// the grid. A full repaint at that width wraps every over-wide row,
+// shifting the frame down; the rows it spilled into sit below the
+// frame's last row and would otherwise survive every later repaint.
+// Padding puts those rows inside the frame, and the repaint on the next
+// size change erases them. A stale-height frame can scroll the pane for
+// the same ≤250 ms window; the repaint that follows rewrites every row.
+func padToHeight(lines []string, rows int) []string {
+	for len(lines) < rows {
+		lines = append(lines, "")
+	}
+	return lines
 }
