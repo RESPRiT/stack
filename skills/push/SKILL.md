@@ -46,11 +46,19 @@ it carries one — followed by a one-line reminder addressed to you:
 
 **The user does not see Bash output.** The header reaches them only if you put
 it in your reply, so a header left in tool output is a missed switch. It goes
-at the top of this turn's **final** reply — the message that ends the turn, not
-an interim note before more tool calls. If you keep working after the push,
-carry it to the end. If the focus moves more than once in a turn (two promotes,
-a pop then a push), echo only the last header. Leave the `↑` reminder line out;
-it is for you.
+in this turn's **final** reply — the message that ends the turn, not an interim
+note before more tool calls.
+
+**The header is a delimiter, not a masthead.** Everything above it belongs to
+the previous topic; everything below it belongs to the new focus. Finish the
+old topic first — the result you just delivered, answers to the user's last
+message — then the header, then orientation on the new focus. Nothing about the
+old topic goes beneath the header. When there is nothing left to say about the
+old topic, the header opens the reply.
+
+If you keep working after the push, carry the header to the end. If the focus moves
+more than once in a turn (two promotes, a pop then a push), echo only the last
+header. Leave the `↑` reminder line out; it is for you.
 
 Echo it verbatim. **Never draw the rule yourself.** Its width is measured
 from the live tmux pane, and a hand-built one comes out the wrong length often

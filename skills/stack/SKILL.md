@@ -55,8 +55,9 @@ topic in bold, and its ref when it has one:
 > **Ref:** blocked on PR #123 review; see internal/webhook/retry.go
 ```
 
-The user does not see Bash output, so echo it verbatim at the top of the
-turn's final reply. **Never draw the rule yourself** — its width is measured
+The user does not see Bash output, so echo it verbatim in the turn's
+final reply, at the point where the new topic begins: wrap up the previous
+topic above it, and put only the new focus beneath it. **Never draw the rule yourself** — its width is measured
 from the live tmux pane, and a hand-built one comes out the wrong length
 often enough that the header stops reading as a landmark, which is the
 only thing it is for. Write the orientation prose underneath it; the

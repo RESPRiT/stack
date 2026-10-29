@@ -14,7 +14,7 @@ import (
 // must reach the reply even when the agent runs push/pop/mv as bare
 // Bash with no skill loaded, and because agents tend to assume the user
 // can see tool output, which they can't.
-const agentTrailer = "↑ The user does not see tool output. Echo the header above verbatim at the top of this turn's final reply (not an interim note), with your orientation beneath it. If the focus moves again this turn, only the last header counts."
+const agentTrailer = "↑ The user does not see tool output. Echo the header above verbatim in this turn's final reply (not an interim note). It marks where the new topic begins: anything still about the previous topic (the result you just delivered, replies to the last message) goes above it; only orientation on the new focus goes beneath it. If the focus moves again this turn, only the last header counts."
 
 // announceFocus prints the context-switch header for main's top after a
 // command that moved it. topics is main's post-mutation contents, so no
