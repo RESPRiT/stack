@@ -4,16 +4,15 @@ description: Push a topic onto the current Claude Code session's stack so the ag
 argument-hint: <topic>
 ---
 
-Run the following command via the Bash tool, then relay its stdout verbatim to the user.
+Run the following command via the Bash tool.
 
 ```
-stack push "$ARGUMENTS" && stack focus
+stack push "$ARGUMENTS"
 ```
 
-The `stack focus` half prints the context-switch header for the new top — see
-**The context-switch header** below for what to do with it. Drop it from the
-command when pushing to a named stack (`--stack backlog`): that doesn't move
-the focus, so there's no switch to announce.
+A push onto `main` prints the context-switch header for the new top — see
+**The context-switch header** below for what to do with it. A push onto a named
+stack (`--stack backlog`) doesn't move the focus and prints no header.
 
 You may re-phrase `$ARGUMENTS` before passing it to `stack push` when the original is verbose, ambiguous, or imprecise — the TUI shows the topic, so a concise, well-scoped phrasing is more useful than a sprawling one. Preserve the meaning; do not change scope.
 
@@ -31,20 +30,32 @@ If the command fails (no `stack` binary on PATH, etc.), tell the user what went 
 
 ## The context-switch header
 
-`stack focus` prints a markdown header naming whatever now sits on top — a
-rule, a `[main · depth N]` counter, the topic in bold, and its ref if it
-carries one:
+When `main`'s top changes, `stack push` prints a markdown header after its own
+output — a rule, a `[main · depth N]` counter, the topic in bold, and its ref if
+it carries one — followed by a one-line reminder addressed to you:
 
 ```
 `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
 `                                            [main · depth 2]`
 `▶` **Refactor the session resolver**
+
+> **Ref:** blocked on PR #123 review; see internal/webhook/retry.go
+
+↑ The user does not see tool output. Echo the header above verbatim …
 ```
 
-Echo it verbatim, as the first thing in your reply. **Never draw the rule
-yourself.** Its width is measured from the live tmux pane, and a hand-built one
-comes out the wrong length often enough that the header stops reading as a
-landmark — which is the only thing it is for.
+**The user does not see Bash output.** The header reaches them only if you put
+it in your reply, so a header left in tool output is a missed switch. It goes
+at the top of this turn's **final** reply — the message that ends the turn, not
+an interim note before more tool calls. If you keep working after the push,
+carry it to the end. If the focus moves more than once in a turn (two promotes,
+a pop then a push), echo only the last header. Leave the `↑` reminder line out;
+it is for you.
+
+Echo it verbatim. **Never draw the rule yourself.** Its width is measured
+from the live tmux pane, and a hand-built one comes out the wrong length often
+enough that the header stops reading as a landmark — which is the only thing it
+is for.
 
 Underneath it, write two or three sentences of orientation: what this topic
 covers, why it's worth its own frame, and what you're doing first. A freshly
@@ -65,15 +76,17 @@ Constraints:
 
 ## Attaching a ref to a pushed item
 
-A pushed topic is just a short label. When the *why* — a blocker, a link, a resume condition, the active mental model — would help on the next encounter, attach it as a ref after the push:
+A pushed topic is just a short label. When the *why* — a blocker, a link, a resume condition, the active mental model — would help on the next encounter, attach it as a ref. Pass it with the push so it lands in the same write and shows in the header:
+
+```
+stack push --ref "waiting on review of PR #123" "<topic>"
+echo "...notes..." | stack push --ref - "<topic>"
+```
+
+To attach or update a ref on an item that's already on the stack, use `stack ref`:
 
 ```
 stack ref top "waiting on review of PR #123"
-```
-
-Pipe in longer notes (multi-line OK) with the `-` form:
-
-```
 echo "...notes..." | stack ref top -
 ```
 

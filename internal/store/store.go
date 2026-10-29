@@ -267,6 +267,12 @@ func save(sessionDir string, s Stack) error {
 // doesn't exist yet (lazy creation — there is no separate "new stack"
 // verb).
 func Push(sessionDir, name, topic string) (Stack, error) {
+	return PushItem(sessionDir, name, Item{Topic: topic})
+}
+
+// PushItem is Push for an item that may already carry a ref, so the
+// topic and its ref land in one write.
+func PushItem(sessionDir, name string, item Item) (Stack, error) {
 	s, err := Load(sessionDir)
 	if err != nil {
 		return Stack{}, err
@@ -276,7 +282,7 @@ func Push(sessionDir, name, topic string) (Stack, error) {
 		s.Stacks = append(s.Stacks, Named{Name: name, Topics: []Item{}})
 		n = &s.Stacks[len(s.Stacks)-1]
 	}
-	n.Topics = append(n.Topics, Item{Topic: topic})
+	n.Topics = append(n.Topics, item)
 	if err := save(sessionDir, s); err != nil {
 		return Stack{}, err
 	}

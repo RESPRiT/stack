@@ -1,18 +1,18 @@
 ---
 name: move
 description: Move an item between the current Claude Code session's named stacks — promote a parked item to the main focus, or park the current focus onto a named stack — atomically, ref included. Invoke when an item should change stacks rather than being finished (/pop) or duplicated (/push).
-argument-hint: "[<pos>] --from <stack> | --to <stack>"
+argument-hint: "--from <stack> | --to <stack> [<pos>]"
 ---
 
-Run the resolved command via the Bash tool and relay its stdout verbatim to the user.
+Run the resolved command via the Bash tool.
 
 ```
-stack mv [<pos>] [--from <name>] [--to <name>] && stack focus
+stack mv [--from <name>] [--to <name>] [<pos>]
 ```
 
-Chain `stack focus` whenever `main` is one of the two endpoints — both a promote and a park change the focus, so both are context switches worth announcing. Drop it for a move between two named stacks, which leaves the focus alone.
+When `main` is one of the two endpoints, `mv` prints the context-switch header — both a promote and a park change the focus. A move between two named stacks leaves the focus alone and prints no header.
 
-- `<pos>` addresses the item in the **source** stack (`top`, `bottom`, or 1-based top-first); omitted means `top`.
+- `<pos>` addresses the item in the **source** stack (`top`, `bottom`, or 1-based top-first); omitted means `top`. Flags may go before or after it.
 - `--from` and `--to` both default to `main`, so the two common motions are terse:
   - **Promote** a parked item to the focus: `stack mv --from backlog`
   - **Park** the current focus for later: `stack mv --to backlog`
@@ -21,11 +21,12 @@ Chain `stack focus` whenever `main` is one of the two endpoints — both a promo
 Then update your working model, mirroring `/push` and `/pop`:
 
 - After a **promote**, the moved item is the new focus.
+- To promote several items, run one `mv` per item. Each prints a header; only the last one matters.
 - After a **park**, the next item down on `main` is the focus again. The header names it, so you don't need a separate `stack ls`. If `main` is now empty, ask the user what's next.
 
 ## The context-switch header
 
-`stack focus` prints a markdown header naming whatever now sits on top of `main` — a rule, a `[main · depth N]` counter, the topic in bold, and its ref if it carries one:
+When `main`'s top changes, `stack mv` prints a markdown header after its own output — a rule, a `[main · depth N]` counter, the topic in bold, and its ref if it carries one — followed by a one-line reminder addressed to you:
 
 ```
 `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
@@ -33,9 +34,13 @@ Then update your working model, mirroring `/push` and `/pop`:
 `▶` **Refactor the session resolver**
 
 > **Ref:** blocked on PR #123 review; see internal/webhook/retry.go
+
+↑ The user does not see tool output. Echo the header above verbatim …
 ```
 
-Echo it verbatim, directly after the `mv` output. **Never draw the rule yourself.** Its width is measured from the live tmux pane, and a hand-built one comes out the wrong length often enough that the header stops reading as a landmark — which is the only thing it is for.
+**The user does not see Bash output.** The header reaches them only if you put it in your reply, so a header left in tool output is a missed switch. It goes at the top of this turn's **final** reply — the message that ends the turn, not an interim note before more tool calls. If you keep working after the move, carry it to the end. If the focus moves more than once in a turn (two promotes, a pop then a push), echo only the last header. Leave the `↑` reminder line out; it is for you.
+
+Echo it verbatim. **Never draw the rule yourself.** Its width is measured from the live tmux pane, and a hand-built one comes out the wrong length often enough that the header stops reading as a landmark — which is the only thing it is for.
 
 Underneath it, write two or three sentences of orientation. A promote and a park want different prose:
 

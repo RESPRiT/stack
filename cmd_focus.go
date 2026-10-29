@@ -14,10 +14,10 @@ import (
 // cmdFocus implements `stack focus`: print the markdown context-switch
 // header naming whatever now sits on top of a stack.
 //
-// It reads state and never mutates it, which is what makes it composable
-// — the skills chain it onto the command that moved the top
-// (`stack pop && stack focus`), and an agent can also run it bare to
-// re-orient after a /clear or when asked what it's working on.
+// It reads state and never mutates it. push, pop, and mv print the same
+// header (via announceFocus) when they move main's top; this command is
+// the on-demand form an agent runs to re-orient after a /clear or when
+// asked what it's working on.
 func cmdFocus(args []string) error {
 	fs := flag.NewFlagSet("focus", flag.ContinueOnError)
 	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")

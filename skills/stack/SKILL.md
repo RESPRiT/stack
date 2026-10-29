@@ -31,15 +31,15 @@ record of what the agent is working on now and what's parked beside it.
   are just the most recent item, not the session's focus.
 - **Items may carry a ref** — a short note (blocker, link, resume state)
   attached via `stack ref`, shown inline in the TUI.
-- **Every focus change is announced.** `stack focus` renders a markdown
-  header naming `main`'s current top; the `/push`, `/pop`, and `/move`
-  skills chain it onto the command that moved the top so the switch is
-  visible in the transcript, not just in the pane.
+- **Every focus change is announced.** `push`, `pop`, and `mv` print a
+  markdown header naming `main`'s new top whenever they move it, and the
+  agent echoes it into its reply so the switch is visible in the
+  transcript, not just in the pane.
 
 ## Announcing a context switch
 
-A stack only helps if the reader can tell when attention moved. `stack
-focus` prints that marker — a rule, a `[main · depth N]` counter, the top
+A stack only helps if the reader can tell when attention moved. Every
+command that moves `main`'s top prints that marker — a rule, a `[main · depth N]` counter, the top
 topic in bold, and its ref when it has one:
 
 ```
@@ -50,14 +50,15 @@ topic in bold, and its ref when it has one:
 > **Ref:** blocked on PR #123 review; see internal/webhook/retry.go
 ```
 
-Echo it verbatim. **Never draw the rule yourself** — its width is measured
+The user does not see Bash output, so echo it verbatim at the top of the
+turn's final reply. **Never draw the rule yourself** — its width is measured
 from the live tmux pane, and a hand-built one comes out the wrong length
 often enough that the header stops reading as a landmark, which is the
 only thing it is for. Write the orientation prose underneath it; the
 binary owns the scaffold, you own the words.
 
-`stack focus` reads state and never mutates it, so it is also the way to
-re-orient outside a push or pop: after a `/clear`, at the start of a
+`stack focus` prints the same header on demand. It reads state and never
+mutates it, so it is the way to re-orient outside a push or pop: after a `/clear`, at the start of a
 resumed session, or when the user asks what you're working on. Reach for
 it instead of guessing from conversation history.
 

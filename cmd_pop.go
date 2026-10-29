@@ -23,6 +23,7 @@ func cmdPop(args []string) error {
 	fs := flag.NewFlagSet("pop", flag.ContinueOnError)
 	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")
 	name := fs.String("stack", store.Main, "target stack")
+	quiet := fs.Bool("quiet", false, "skip the context-switch header")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -50,6 +51,9 @@ func cmdPop(args []string) error {
 	}
 	if len(after) > 0 {
 		fmt.Printf("  next: %s\n", after[len(after)-1].Topic)
+	}
+	if *name == store.Main && !*quiet {
+		announceFocus(after)
 	}
 	return nil
 }

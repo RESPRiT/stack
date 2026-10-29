@@ -10,7 +10,8 @@ import (
 	"stack/internal/store"
 )
 
-// cmdMv implements `stack mv [<pos>] [--from <name>] [--to <name>]`:
+// cmdMv implements `stack mv [<pos>] [--from <name>] [--to <name>]`
+// (flags may come before or after the position):
 // move one item between stacks, ref included, landing on the
 // destination's top. Both flags default to main, so the two common
 // motions are terse: `stack mv --from backlog` promotes a parked item
@@ -20,16 +21,18 @@ func cmdMv(args []string) error {
 	sess := fs.String("session", "", "session id (default: $CLAUDE_CODE_SESSION_ID or newest)")
 	from := fs.String("from", store.Main, "source stack")
 	to := fs.String("to", store.Main, "destination stack (created if new)")
-	if err := fs.Parse(args); err != nil {
+	quiet := fs.Bool("quiet", false, "skip the context-switch header")
+	positional, err := parseInterspersed(fs, args)
+	if err != nil {
 		return err
 	}
 	posArg := "top"
-	switch fs.NArg() {
+	switch len(positional) {
 	case 0:
 	case 1:
-		posArg = fs.Arg(0)
+		posArg = positional[0]
 	default:
-		return fmt.Errorf("mv takes at most one position argument (got %q)", fs.Arg(1))
+		return fmt.Errorf("mv takes at most one position argument (got %q)", positional[1])
 	}
 
 	id, dir, err := session.Resolve(*sess)
@@ -62,6 +65,10 @@ func cmdMv(args []string) error {
 		targetLabel(id, *from), targetLabel(id, *to), s.Depth(*to), item.Topic)
 	if item.Ref != "" {
 		fmt.Printf("  ref: %s\n", item.Ref)
+	}
+	if (*from == store.Main || *to == store.Main) && !*quiet {
+		main, _ := s.Get(store.Main)
+		announceFocus(main)
 	}
 	return nil
 }
