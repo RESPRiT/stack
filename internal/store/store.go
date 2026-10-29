@@ -21,6 +21,9 @@
 // topic, no ref) or a `{"topic": "...", "ref": "..."}` object. Ref-less
 // items stay as bare strings on save so hand-editing remains easy for
 // the common case.
+//
+// Every mutation is also journaled to history.jsonl beside stack.json
+// (see Entry), which backs pop history and undo.
 package store
 
 import (
@@ -277,13 +280,14 @@ func PushItem(sessionDir, name string, item Item) (Stack, error) {
 	if err != nil {
 		return Stack{}, err
 	}
+	before := clone(s)
 	n := s.find(name)
 	if n == nil {
 		s.Stacks = append(s.Stacks, Named{Name: name, Topics: []Item{}})
 		n = &s.Stacks[len(s.Stacks)-1]
 	}
 	n.Topics = append(n.Topics, item)
-	if err := save(sessionDir, s); err != nil {
+	if err := commit(sessionDir, before, s, Entry{Op: OpPush, Stack: name, Item: &item}); err != nil {
 		return Stack{}, err
 	}
 	return s, nil
@@ -304,9 +308,10 @@ func Pop(sessionDir, name string) (popped Item, after []Item, err error) {
 	if len(n.Topics) == 0 {
 		return Item{}, nil, ErrEmpty
 	}
+	before := clone(s)
 	popped = n.Topics[len(n.Topics)-1]
 	n.Topics = n.Topics[:len(n.Topics)-1]
-	if err := save(sessionDir, s); err != nil {
+	if err := commit(sessionDir, before, s, Entry{Op: OpPop, Stack: name, Item: &popped}); err != nil {
 		return Item{}, nil, err
 	}
 	return popped, n.Topics, nil
@@ -327,13 +332,14 @@ func Delete(sessionDir, name string) (int, error) {
 		return 0, s.noStackErr(name)
 	}
 	depth := len(n.Topics)
+	before := clone(s)
 	for i := range s.Stacks {
 		if s.Stacks[i].Name == name {
 			s.Stacks = append(s.Stacks[:i], s.Stacks[i+1:]...)
 			break
 		}
 	}
-	if err := save(sessionDir, s); err != nil {
+	if err := commit(sessionDir, before, s, Entry{Op: OpRm, Stack: name}); err != nil {
 		return 0, err
 	}
 	return depth, nil
@@ -364,6 +370,7 @@ func MoveItem(sessionDir, fromName string, pos int, toName string) (Item, Stack,
 	if err != nil {
 		return Item{}, Stack{}, err
 	}
+	before := clone(s)
 	item := src.Topics[idx]
 	src.Topics = append(src.Topics[:idx], src.Topics[idx+1:]...)
 	dst := s.find(toName)
@@ -372,7 +379,7 @@ func MoveItem(sessionDir, fromName string, pos int, toName string) (Item, Stack,
 		dst = &s.Stacks[len(s.Stacks)-1]
 	}
 	dst.Topics = append(dst.Topics, item)
-	if err := save(sessionDir, s); err != nil {
+	if err := commit(sessionDir, before, s, Entry{Op: OpMv, Stack: fromName, To: toName, Item: &item}); err != nil {
 		return Item{}, Stack{}, err
 	}
 	return item, s, nil
@@ -389,9 +396,11 @@ func posToArrayIndex(pos, n int) (int, error) {
 }
 
 // mutate loads the session, resolves the named stack (erroring on
-// unknown names or an empty stack), applies fn to it, and saves. The
-// shared shape of Rename/Move/SetRef.
-func mutate(sessionDir, name string, fn func(*Named) error) (Stack, error) {
+// unknown names or an empty stack), applies fn to it, and commits it
+// as op. fn returns the item it acted on as it stands after the change,
+// plus its prior form when the change rewrote it in place, for the op
+// log. The shared shape of Rename/Move/SetRef.
+func mutate(sessionDir, name, op string, fn func(*Named) (Item, *Item, error)) (Stack, error) {
 	s, err := Load(sessionDir)
 	if err != nil {
 		return Stack{}, err
@@ -403,10 +412,12 @@ func mutate(sessionDir, name string, fn func(*Named) error) (Stack, error) {
 	if len(n.Topics) == 0 {
 		return s, ErrEmpty
 	}
-	if err := fn(n); err != nil {
+	before := clone(s)
+	item, from, err := fn(n)
+	if err != nil {
 		return s, err
 	}
-	if err := save(sessionDir, s); err != nil {
+	if err := commit(sessionDir, before, s, Entry{Op: op, Stack: name, Item: &item, From: from}); err != nil {
 		return Stack{}, err
 	}
 	return s, nil
@@ -415,13 +426,14 @@ func mutate(sessionDir, name string, fn func(*Named) error) (Stack, error) {
 // Rename replaces the topic at user-facing position pos with newText.
 // The ref (if any) is preserved. pos is 1-based top-first.
 func Rename(sessionDir, name string, pos int, newText string) (Stack, error) {
-	return mutate(sessionDir, name, func(n *Named) error {
+	return mutate(sessionDir, name, OpRename, func(n *Named) (Item, *Item, error) {
 		idx, err := posToArrayIndex(pos, len(n.Topics))
 		if err != nil {
-			return err
+			return Item{}, nil, err
 		}
+		old := n.Topics[idx]
 		n.Topics[idx].Topic = newText
-		return nil
+		return n.Topics[idx], &old, nil
 	})
 }
 
@@ -429,26 +441,26 @@ func Rename(sessionDir, name string, pos int, newText string) (Stack, error) {
 // 1-based top-first. A no-op (from == to) succeeds silently. Ref
 // travels with the item.
 func Move(sessionDir, name string, from, to int) (Stack, error) {
-	return mutate(sessionDir, name, func(n *Named) error {
+	return mutate(sessionDir, name, OpMove, func(n *Named) (Item, *Item, error) {
 		fi, err := posToArrayIndex(from, len(n.Topics))
 		if err != nil {
-			return err
+			return Item{}, nil, err
 		}
 		ti, err := posToArrayIndex(to, len(n.Topics))
 		if err != nil {
-			return err
-		}
-		if fi == ti {
-			return nil
+			return Item{}, nil, err
 		}
 		item := n.Topics[fi]
+		if fi == ti {
+			return item, nil, nil
+		}
 		without := append([]Item(nil), n.Topics[:fi]...)
 		without = append(without, n.Topics[fi+1:]...)
 		if ti > len(without) {
 			ti = len(without)
 		}
 		n.Topics = append(without[:ti], append([]Item{item}, without[ti:]...)...)
-		return nil
+		return item, nil, nil
 	})
 }
 
@@ -456,12 +468,13 @@ func Move(sessionDir, name string, from, to int) (Stack, error) {
 // position pos. An empty string clears the ref (the item reverts to a
 // bare string on disk).
 func SetRef(sessionDir, name string, pos int, ref string) (Stack, error) {
-	return mutate(sessionDir, name, func(n *Named) error {
+	return mutate(sessionDir, name, OpRef, func(n *Named) (Item, *Item, error) {
 		idx, err := posToArrayIndex(pos, len(n.Topics))
 		if err != nil {
-			return err
+			return Item{}, nil, err
 		}
+		old := n.Topics[idx]
 		n.Topics[idx].Ref = ref
-		return nil
+		return n.Topics[idx], &old, nil
 	})
 }

@@ -8,7 +8,7 @@ import (
 // Version is the user-visible release marker. Shown in the TUI header
 // and by `stack --version`. Bumped manually per release; pre-1.0 while
 // the surface is still iterating.
-const Version = "0.2.7"
+const Version = "0.2.8"
 
 const usage = `stack — topic stacks for coding-agent sessions.
 
@@ -39,6 +39,13 @@ Usage:
   stack ref [--stack <name>] <pos> <text>...  set the ref inline (args joined with spaces)
   stack ref [--stack <name>] <pos> -          read the ref from stdin
   stack ref [--stack <name>] <pos> --clear    remove the ref
+  stack history [-v] [--all] [-n N]        popped topics, newest first (default 20);
+                                           --all lists every op, -v prints refs
+  stack undo [--force]                     revert the last push/pop/mv/rm/edit/ref;
+                                           repeat to step further back. Refuses if
+                                           stack.json isn't what that op left (hand
+                                           edit, unlogged write); --force restores
+                                           anyway, discarding everything since
   stack tui                live TUI view; inside an @stack-tui pane runs the foreground
                            process, outside it auto-spawns one (= stack tui open)
   stack tui open           spawn the @stack-tui pane (idempotent — no-op if one exists)
@@ -94,6 +101,10 @@ func main() {
 		err = cmdHook(args)
 	case "ref":
 		err = cmdRef(args)
+	case "history":
+		err = cmdHistory(args)
+	case "undo":
+		err = cmdUndo(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	case "version", "--version", "-v":
