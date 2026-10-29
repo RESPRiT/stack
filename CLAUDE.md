@@ -2,7 +2,7 @@
 
 ## Versioning
 
-Pre-1.0 the version format is `0.MINOR.PATCH` (currently `0.1.x`), held in
+Pre-1.0 the version format is `0.MINOR.PATCH` (currently `0.2.x`), held in
 the `Version` constant in `main.go` and surfaced in both the TUI header and
 `stack version`.
 
